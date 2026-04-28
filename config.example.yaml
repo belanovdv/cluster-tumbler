@@ -1,0 +1,63 @@
+local:
+  etcd:
+    endpoints:
+      - ds-cluster-node3.mp10.ptsecurity.ru:2379
+      - ds-cluster-node4.mp10.ptsecurity.ru:2379
+      - ds-cluster-node5.mp10.ptsecurity.ru:2379
+    dial_timeout: 3s
+    retry_interval: 1s
+  logger:
+    level: debug
+    format: plain
+    console: true
+    file: ""
+  api:
+    listen: ":5080"
+
+cluster:
+  id: second_cluster
+  groups:
+    - geo_dc
+  failover_mode: manual
+  leader_ttl: 2s
+  leader_renew_interval: 500ms
+  session_ttl: 30s
+
+agent:
+  node_id: node1
+  memberships:
+    - cluster_group: geo_dc
+      management_group: DC1
+      priority: 1
+      roles:
+        - core
+        - mc
+
+roles:
+  core:
+    actors:
+      probe_active: ./actors/core/probe_active.sh
+      set_active: ./actors/core/set_active.sh
+      probe_passive: ./actors/core/probe_passive.sh
+      set_passive: ./actors/core/set_passive.sh
+      force_stop: ./actors/core/force_stop.sh
+    timeouts:
+      exec: 5s
+      converge: 10s
+      retry_interval: 1s
+      check_interval: 5s
+      details_max_size: 4096
+
+  mc:
+    actors:
+      probe_active: ./actors/mc/probe_active.sh
+      set_active: ./actors/mc/set_active.sh
+      probe_passive: ./actors/mc/probe_passive.sh
+      set_passive: ./actors/mc/set_passive.sh
+      force_stop: ./actors/mc/force_stop.sh
+    timeouts:
+      exec: 5s
+      converge: 10s
+      retry_interval: 1s
+      check_interval: 5s
+      details_max_size: 4096
