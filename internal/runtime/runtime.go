@@ -1,20 +1,22 @@
+// Package runtime собирает все модули агента в единый lifecycle.
 package runtime
 
 import (
 	"context"
 	"time"
 
-	"cluster-agent/internal/api"
-	"cluster-agent/internal/bootstrap"
-	"cluster-agent/internal/config"
-	"cluster-agent/internal/controller"
-	"cluster-agent/internal/etcd"
-	"cluster-agent/internal/keys"
-	"cluster-agent/internal/leadership"
-	"cluster-agent/internal/logging"
-	"cluster-agent/internal/roles"
-	"cluster-agent/internal/session"
-	"cluster-agent/internal/store"
+	"cluster-tumbler/internal/api"
+	"cluster-tumbler/internal/bootstrap"
+	"cluster-tumbler/internal/config"
+	"cluster-tumbler/internal/controller"
+	"cluster-tumbler/internal/etcd"
+	"cluster-tumbler/internal/keys"
+	"cluster-tumbler/internal/leadership"
+	"cluster-tumbler/internal/logging"
+	"cluster-tumbler/internal/roles"
+	"cluster-tumbler/internal/session"
+	"cluster-tumbler/internal/store"
+
 	"go.uber.org/zap"
 )
 
@@ -33,6 +35,7 @@ type Runtime struct {
 	roles      *roles.Manager
 }
 
+// New создает и связывает все модули.
 func New(cfg *config.Config) (*Runtime, error) {
 	baseLogger, err := logging.New(cfg.Local.Logger)
 	if err != nil {
@@ -99,8 +102,9 @@ func New(cfg *config.Config) (*Runtime, error) {
 	}, nil
 }
 
+// Run запускает API, ETCD sync, bootstrap, session, roles, leadership и controller.
 func (r *Runtime) Run(ctx context.Context) error {
-	r.log.Info("starting cluster-agent")
+	r.log.Info("starting cluster-tumbler")
 
 	go func() {
 		if err := r.api.Run(ctx); err != nil {
@@ -152,7 +156,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 
 	<-ctx.Done()
 
-	r.log.Info("cluster-agent stopped")
+	r.log.Info("cluster-tumbler stopped")
 	return ctx.Err()
 }
 
@@ -226,4 +230,3 @@ func (r *Runtime) controllerWhenLeader(ctx context.Context) {
 		}
 	}
 }
-

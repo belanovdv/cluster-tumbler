@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-// Store хранит KV snapshot.
+// Store хранит KV ETCD snapshot.
 type Store struct {
 	mu       sync.RWMutex
 	data     map[string][]byte

@@ -15,10 +15,10 @@ local:
     listen: ":5080"
 
 cluster:
-  id: second_cluster
+  id: first_cluster
   groups:
     - geo_dc
-  failover_mode: manual
+  failover_mode: automatic
   leader_ttl: 2s
   leader_renew_interval: 500ms
   session_ttl: 30s

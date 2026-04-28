@@ -1,3 +1,8 @@
+// Package api реализует HTTP API и подключает web UI.
+//
+// JSON state доступен на /api/v1/state.
+// HTML UI доступен на /.
+// Команды создаются через /api/v1/commands, но обработка command queue пока не реализована.
 package api
 
 import (
@@ -6,17 +11,20 @@ import (
 	"net/http"
 	"time"
 
-	"cluster-agent/internal/keys"
-	"cluster-agent/internal/model"
-	"cluster-agent/internal/store"
-        "cluster-agent/internal/web"
+	"cluster-tumbler/internal/keys"
+	"cluster-tumbler/internal/model"
+	"cluster-tumbler/internal/store"
+	"cluster-tumbler/internal/web"
+
 	"go.uber.org/zap"
 )
 
+// Putter описывает минимальный интерфейс записи в backend.
 type Putter interface {
 	Put(ctx context.Context, key string, value []byte) error
 }
 
+// Server содержит HTTP API и web UI.
 type Server struct {
 	addr      string
 	clusterID string
@@ -25,6 +33,7 @@ type Server struct {
 	log       *zap.Logger
 }
 
+// New создает HTTP server.
 func New(addr string, clusterID string, st *store.StateStore, putter Putter, log *zap.Logger) *Server {
 	return &Server{
 		addr:      addr,
@@ -35,8 +44,8 @@ func New(addr string, clusterID string, st *store.StateStore, putter Putter, log
 	}
 }
 
+// Run запускает HTTP API/UI.
 func (s *Server) Run(ctx context.Context) error {
-
 	mux := http.NewServeMux()
 
 	mux.Handle("/assets/", web.AssetsHandler())
@@ -68,43 +77,6 @@ func (s *Server) Run(ctx context.Context) error {
 
 	return nil
 }
-
-
-
-/*
-func (s *Server) Run(ctx context.Context) error {
-	mux := http.NewServeMux()
-
-//	mux.HandleFunc("/", s.handleState)
-        mux.HandleFunc("/", web.Handler())
-	mux.HandleFunc("/api/v1/state", s.handleState)
-	mux.HandleFunc("/api/v1/commands", s.handleCommands)
-
-	server := &http.Server{
-		Addr:    s.addr,
-		Handler: mux,
-	}
-
-	go func() {
-		<-ctx.Done()
-
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			s.log.Warn("api server shutdown failed", zap.Error(err))
-		}
-	}()
-
-	s.log.Info("starting api server", zap.String("listen", s.addr))
-
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
-	}
-
-	return nil
-}
-*/
 
 func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -189,4 +161,3 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		"status":     cmd.Status,
 	})
 }
-
