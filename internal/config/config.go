@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"cluster-tumbler/internal/logging"
+	"cluster-agent/internal/logging"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,8 +31,8 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 
 type Config struct {
 	Local   LocalConfig           `yaml:"local"`
-	Cluster ClusterConfig        `yaml:"cluster"`
-	Agent   AgentConfig          `yaml:"agent"`
+	Cluster ClusterConfig         `yaml:"cluster"`
+	Agent   AgentConfig           `yaml:"agent"`
 	Roles   map[string]RoleConfig `yaml:"roles"`
 }
 

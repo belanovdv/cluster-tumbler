@@ -33,19 +33,18 @@ type DesiredDocument struct {
 	State     DesiredState `json:"state"`
 	UpdatedAt time.Time    `json:"updated_at"`
 	Details   string       `json:"details,omitempty"`
-
 }
 
 type ActualDocument struct {
 	State     ActualState `json:"state"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	Details   string     `json:"details,omitempty"`
+	UpdatedAt time.Time   `json:"updated_at"`
+	Details   string      `json:"details,omitempty"`
 }
 
 type HealthDocument struct {
 	Status    HealthStatus `json:"status"`
 	UpdatedAt time.Time    `json:"updated_at"`
-	Details   string        `json:"details,omitempty"`
+	Details   string       `json:"details,omitempty"`
 }
 
 type ManagementGroupConfigDocument struct {
@@ -87,16 +86,15 @@ const (
 )
 
 type Command struct {
-	ID              string       `json:"id"`
-	Type            string       `json:"type"`
-	ClusterGroup    string       `json:"cluster_group"`
-	ManagementGroup string       `json:"management_group"`
-	Desired         DesiredState `json:"desired"`
+	ID              string        `json:"id"`
+	Type            string        `json:"type"`
+	ClusterGroup    string        `json:"cluster_group"`
+	ManagementGroup string        `json:"management_group"`
+	Desired         DesiredState  `json:"desired"`
 	Status          CommandStatus `json:"status"`
-	Owner           string       `json:"owner,omitempty"`
-	Error           string       `json:"error,omitempty"`
-	CreatedAt       time.Time    `json:"created_at"`
-	StartedAt       *time.Time   `json:"started_at,omitempty"`
-	FinishedAt      *time.Time   `json:"finished_at,omitempty"`
+	Owner           string        `json:"owner,omitempty"`
+	Error           string        `json:"error,omitempty"`
+	CreatedAt       time.Time     `json:"created_at"`
+	StartedAt       *time.Time    `json:"started_at,omitempty"`
+	FinishedAt      *time.Time    `json:"finished_at,omitempty"`
 }
-

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"cluster-tumbler/internal/store"
+	"cluster-agent/internal/store"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 )

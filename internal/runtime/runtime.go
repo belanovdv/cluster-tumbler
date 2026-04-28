@@ -4,17 +4,17 @@ import (
 	"context"
 	"time"
 
-	"cluster-tumbler/internal/api"
-	"cluster-tumbler/internal/bootstrap"
-	"cluster-tumbler/internal/config"
-	"cluster-tumbler/internal/controller"
-	"cluster-tumbler/internal/etcd"
-	"cluster-tumbler/internal/keys"
-	"cluster-tumbler/internal/leadership"
-	"cluster-tumbler/internal/logging"
-	"cluster-tumbler/internal/roles"
-	"cluster-tumbler/internal/session"
-	"cluster-tumbler/internal/store"
+	"cluster-agent/internal/api"
+	"cluster-agent/internal/bootstrap"
+	"cluster-agent/internal/config"
+	"cluster-agent/internal/controller"
+	"cluster-agent/internal/etcd"
+	"cluster-agent/internal/keys"
+	"cluster-agent/internal/leadership"
+	"cluster-agent/internal/logging"
+	"cluster-agent/internal/roles"
+	"cluster-agent/internal/session"
+	"cluster-agent/internal/store"
 	"go.uber.org/zap"
 )
 
@@ -226,4 +226,3 @@ func (r *Runtime) controllerWhenLeader(ctx context.Context) {
 		}
 	}
 }
-

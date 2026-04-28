@@ -8,11 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"cluster-tumbler/internal/config"
-	"cluster-tumbler/internal/runtime"
+	"cluster-agent/internal/config"
+	"cluster-agent/internal/runtime"
 )
 
-// main загружает конфигурацию, создает runtime и блокируется до SIGINT/SIGTERM.
 func main() {
 	cfgPath := flag.String("config", "config.yaml", "path to config file")
 	flag.Parse()

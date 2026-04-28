@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"time"
 
-	"cluster-tumbler/internal/config"
-	"cluster-tumbler/internal/etcd"
-	"cluster-tumbler/internal/keys"
-	"cluster-tumbler/internal/model"
+	"cluster-agent/internal/config"
+	"cluster-agent/internal/etcd"
+	"cluster-agent/internal/keys"
+	"cluster-agent/internal/model"
 	"go.uber.org/zap"
 )
 
@@ -65,7 +65,7 @@ func (b *Bootstrapper) ensureMembership(ctx context.Context, membership config.M
 	desired := model.DesiredDocument{
 		State:     model.DesiredIdle,
 		UpdatedAt: now,
-		Details:    "bootstrap",
+		Details:   "bootstrap",
 	}
 
 	desiredData, err := json.Marshal(desired)

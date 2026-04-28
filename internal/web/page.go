@@ -25,8 +25,6 @@ func Handler() http.HandlerFunc {
 	}
 }
 
-
-
 const pageHTML = `<!doctype html>
 <html lang="ru">
 <head>

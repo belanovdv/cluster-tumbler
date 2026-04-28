@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"sort"
 
-	"cluster-tumbler/internal/store"
+	"cluster-agent/internal/store"
 )
 
 type StateView struct {
@@ -27,10 +27,10 @@ type ClusterGroupView struct {
 }
 
 type ManagementGroupView struct {
-	Config  json.RawMessage     `json:"config,omitempty"`
-	Desired json.RawMessage     `json:"desired,omitempty"`
-	Actual  json.RawMessage     `json:"actual,omitempty"`
-	Health  json.RawMessage     `json:"health,omitempty"`
+	Config  json.RawMessage      `json:"config,omitempty"`
+	Desired json.RawMessage      `json:"desired,omitempty"`
+	Actual  json.RawMessage      `json:"actual,omitempty"`
+	Health  json.RawMessage      `json:"health,omitempty"`
 	Nodes   map[string]*NodeView `json:"nodes,omitempty"`
 }
 
@@ -328,5 +328,3 @@ func isManagementSystemKey(name string) bool {
 		return false
 	}
 }
-
-

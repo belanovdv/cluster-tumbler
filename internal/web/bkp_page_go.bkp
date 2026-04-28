@@ -1,0 +1,502 @@
+package web
+
+import "net/http"
+
+func Handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(pageHTML))
+	}
+}
+
+const pageHTML = `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cluster Agent</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --panel: #f7f8fb;
+      --line: #e1e5ee;
+      --text: #20242c;
+      --muted: #66708a;
+      --soft: #eef1f7;
+      --red: #ff0000;
+
+      --idle: #e5e7eb;
+      --active: #d8f5df;
+      --passive: #fff0c2;
+      --ok: #c9f2d3;
+      --warning: #ffe08a;
+      --failed: #ffd0d0;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      font-size: 15px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 56px 1fr;
+      min-height: 100vh;
+    }
+
+    .rail {
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 18px 0;
+      gap: 18px;
+    }
+
+    .app-grid {
+      width: 19px;
+      height: 19px;
+      display: grid;
+      grid-template-columns: repeat(3, 5px);
+      grid-template-rows: repeat(3, 5px);
+      gap: 2px;
+    }
+
+    .app-grid span {
+      background: #111827;
+      border-radius: 1px;
+    }
+
+    .logo {
+      width: 38px;
+      height: 38px;
+      border-radius: 5px;
+      background: var(--red);
+      color: white;
+      font-weight: 800;
+      font-size: 25px;
+      line-height: 38px;
+      text-align: center;
+      letter-spacing: -1px;
+    }
+
+    .nav-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      color: #101828;
+    }
+
+    .nav-icon.active {
+      background: #eef1f7;
+    }
+
+    .main {
+      padding: 32px 30px;
+      overflow: hidden;
+    }
+
+    .title {
+      font-size: 26px;
+      font-weight: 700;
+      margin-bottom: 24px;
+    }
+
+    .meta {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 20px;
+      color: var(--muted);
+    }
+
+    .pill {
+      border: 1px solid #c8d0df;
+      border-radius: 8px;
+      padding: 8px 13px;
+      background: #fff;
+      color: #66708a;
+      font-size: 16px;
+    }
+
+    .content {
+      display: grid;
+      grid-template-columns: 380px minmax(0, 1fr);
+      gap: 28px;
+      height: calc(100vh - 140px);
+      min-height: 520px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .panel-header {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      font-weight: 700;
+      font-size: 17px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .panel-body {
+      padding: 14px;
+      overflow: auto;
+      height: calc(100% - 57px);
+    }
+
+    .group-title {
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 14px;
+      margin: 12px 6px 8px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    .mg-item {
+      border: 1px solid transparent;
+      border-radius: 11px;
+      padding: 12px;
+      cursor: pointer;
+      margin-bottom: 8px;
+      background: #fff;
+    }
+
+    .mg-item:hover {
+      background: #f8f9fc;
+    }
+
+    .mg-item.selected {
+      border-color: #c8d0df;
+      background: #f3f5fa;
+    }
+
+    .mg-name {
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 13px;
+      color: #394150;
+      border: 1px solid rgba(0,0,0,.06);
+    }
+
+    .state-idle { background: var(--idle); }
+    .state-active { background: var(--active); }
+    .state-passive { background: var(--passive); }
+    .state-starting, .state-stopping { background: #dbeafe; }
+    .state-failed { background: var(--failed); }
+
+    .health-ok { background: var(--ok); }
+    .health-warning { background: var(--warning); }
+    .health-failed { background: var(--failed); }
+
+    .details-title {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+
+    .section {
+      margin-bottom: 22px;
+    }
+
+    .section-title {
+      font-size: 15px;
+      color: var(--muted);
+      font-weight: 700;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 130px 1fr;
+      gap: 8px;
+      padding: 7px 0;
+      border-bottom: 1px solid #f0f2f6;
+    }
+
+    .kv-key {
+      color: var(--muted);
+    }
+
+    .node-card {
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      margin-bottom: 14px;
+      overflow: hidden;
+    }
+
+    .node-header {
+      padding: 12px 14px;
+      background: #f7f8fb;
+      font-weight: 700;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .role-row {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid #f0f2f6;
+      align-items: start;
+    }
+
+    .role-row:last-child {
+      border-bottom: none;
+    }
+
+    .role-name {
+      font-weight: 600;
+    }
+
+    .empty {
+      color: var(--muted);
+      padding: 20px;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    pre {
+      margin: 8px 0 0;
+      padding: 10px;
+      background: #f7f8fb;
+      border-radius: 8px;
+      overflow: auto;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="rail">
+      <div class="app-grid" title="menu">
+        <span></span><span></span><span></span>
+        <span></span><span></span><span></span>
+        <span></span><span></span><span></span>
+      </div>
+
+      <div class="logo">pt</div>
+
+      <div class="nav-icon active" title="View">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+          <path d="M12 3v5m0 0H7m5 0h5M7 8v5m10-5v5M7 13h10M7 13v4h10v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="title">Cluster Agent</div>
+
+      <div class="meta">
+        <span class="pill" id="cluster-id">Cluster</span>
+        <span class="pill" id="revision">Revision</span>
+        <span class="pill" id="leader">Leader</span>
+      </div>
+
+      <div class="content">
+        <section class="panel">
+          <div class="panel-header">
+            <span>Groups</span>
+            <span class="muted" id="ready">loading</span>
+          </div>
+          <div class="panel-body" id="groups"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <span>Management Group Details</span>
+          </div>
+          <div class="panel-body" id="details"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    let state = null;
+    let selected = null;
+
+    function badge(label, value, kind) {
+      const safe = value || "unknown";
+      return '<span class="badge ' + kind + '-' + safe + '">' + label + ': ' + safe + '</span>';
+    }
+
+    function docState(doc) {
+      return doc && doc.state ? doc.state : "";
+    }
+
+    function docStatus(doc) {
+      return doc && doc.status ? doc.status : "";
+    }
+
+    function jsonBlock(obj) {
+      if (!obj) return '<span class="muted">—</span>';
+      return '<pre>' + escapeHtml(JSON.stringify(obj, null, 2)) + '</pre>';
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+    }
+
+    function loadDefaultSelection() {
+      const groups = state.cluster.groups || {};
+      for (const groupName of Object.keys(groups)) {
+        const mgs = groups[groupName].management_groups || {};
+        for (const mgName of Object.keys(mgs)) {
+          selected = { groupName, mgName };
+          return;
+        }
+      }
+    }
+
+    function renderMeta() {
+      document.getElementById("ready").textContent = state.ready ? "ready" : "not ready";
+      document.getElementById("cluster-id").textContent = "Cluster: " + state.cluster.id;
+      document.getElementById("revision").textContent = "Revision: " + state.revision;
+
+      const l = state.cluster.leadership;
+      document.getElementById("leader").textContent = "Leader: " + (l && l.owner_node_id ? l.owner_node_id : "—");
+    }
+
+    function renderGroups() {
+      const el = document.getElementById("groups");
+      const groups = state.cluster.groups || {};
+      let html = "";
+
+      for (const groupName of Object.keys(groups)) {
+        html += '<div class="group-title">' + escapeHtml(groupName) + '</div>';
+
+        const mgs = groups[groupName].management_groups || {};
+        for (const mgName of Object.keys(mgs)) {
+          const mg = mgs[mgName];
+          const isSelected = selected && selected.groupName === groupName && selected.mgName === mgName;
+
+          html += '<div class="mg-item ' + (isSelected ? 'selected' : '') + '" onclick="selectMG(\'' + groupName + '\', \'' + mgName + '\')">';
+          html += '<div class="mg-name">' + escapeHtml(mgName) + '</div>';
+          html += '<div class="badges">';
+          html += badge("desired", docState(mg.desired), "state");
+          html += badge("actual", docState(mg.actual), "state");
+          html += badge("health", docStatus(mg.health), "health");
+          if (mg.config && mg.config.priority) {
+            html += '<span class="badge">priority: ' + mg.config.priority + '</span>';
+          }
+          html += '</div></div>';
+        }
+      }
+
+      el.innerHTML = html || '<div class="empty">No groups</div>';
+    }
+
+    window.selectMG = function(groupName, mgName) {
+      selected = { groupName, mgName };
+      renderGroups();
+      renderDetails();
+    }
+
+    function renderDetails() {
+      const el = document.getElementById("details");
+
+      if (!selected) {
+        el.innerHTML = '<div class="empty">No management group selected</div>';
+        return;
+      }
+
+      const mg = state.cluster.groups[selected.groupName].management_groups[selected.mgName];
+
+      let html = '<div class="details-title">' + escapeHtml(selected.groupName) + ' / ' + escapeHtml(selected.mgName) + '</div>';
+
+      html += '<div class="section"><div class="section-title">Summary</div>';
+      html += '<div class="kv"><div class="kv-key">Desired</div><div>' + jsonBlock(mg.desired) + '</div></div>';
+      html += '<div class="kv"><div class="kv-key">Actual</div><div>' + jsonBlock(mg.actual) + '</div></div>';
+      html += '<div class="kv"><div class="kv-key">Health</div><div>' + jsonBlock(mg.health) + '</div></div>';
+      html += '<div class="kv"><div class="kv-key">Config</div><div>' + jsonBlock(mg.config) + '</div></div>';
+      html += '</div>';
+
+      html += '<div class="section"><div class="section-title">Nodes</div>';
+
+      const nodes = mg.nodes || {};
+      const nodeNames = Object.keys(nodes);
+
+      if (nodeNames.length === 0) {
+        html += '<div class="empty">No nodes</div>';
+      }
+
+      for (const nodeName of nodeNames) {
+        const node = nodes[nodeName];
+        html += '<div class="node-card">';
+        html += '<div class="node-header">' + escapeHtml(nodeName) + '</div>';
+
+        const roles = node.roles || {};
+        for (const roleName of Object.keys(roles)) {
+          const role = roles[roleName];
+          html += '<div class="role-row">';
+          html += '<div class="role-name">' + escapeHtml(roleName) + '</div>';
+          html += '<div class="badges">';
+          html += badge("actual", docState(role.actual), "state");
+          html += badge("health", docStatus(role.health), "health");
+          html += '</div>';
+          html += '</div>';
+        }
+
+        html += '</div>';
+      }
+
+      html += '</div>';
+
+      el.innerHTML = html;
+    }
+
+    async function init() {
+      const res = await fetch('/api/v1/state');
+      state = await res.json();
+
+      if (!selected) {
+        loadDefaultSelection();
+      }
+
+      renderMeta();
+      renderGroups();
+      renderDetails();
+    }
+
+    init().catch(err => {
+      document.getElementById("groups").innerHTML = '<div class="empty">Failed to load state</div>';
+      document.getElementById("details").innerHTML = '<pre>' + escapeHtml(err.stack || err.message) + '</pre>';
+    });
+  </script>
+</body>
+</html>`

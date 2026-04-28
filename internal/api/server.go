@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	"cluster-tumbler/internal/keys"
-	"cluster-tumbler/internal/model"
-	"cluster-tumbler/internal/store"
-        "cluster-tumbler/internal/web"
+	"cluster-agent/internal/keys"
+	"cluster-agent/internal/model"
+	"cluster-agent/internal/store"
+	"cluster-agent/internal/web"
 	"go.uber.org/zap"
 )
 
@@ -68,8 +68,6 @@ func (s *Server) Run(ctx context.Context) error {
 
 	return nil
 }
-
-
 
 /*
 func (s *Server) Run(ctx context.Context) error {
@@ -189,4 +187,3 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		"status":     cmd.Status,
 	})
 }
-
