@@ -1,3 +1,4 @@
+// Package logging настраивает zap logger для всех модулей.
 package logging
 
 import (
@@ -8,6 +9,7 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// Config описывает параметры логирования.
 type Config struct {
 	Level   string `yaml:"level"`
 	Format  string `yaml:"format"`
@@ -15,6 +17,7 @@ type Config struct {
 	File    string `yaml:"file"`
 }
 
+// New создает базовый zap logger без caller/file:line.
 func New(cfg Config) (*zap.Logger, error) {
 	level := zapcore.DebugLevel
 	if cfg.Level != "" {
@@ -37,10 +40,9 @@ func New(cfg Config) (*zap.Logger, error) {
 	}
 
 	var encoder zapcore.Encoder
-	switch cfg.Format {
-	case "json":
+	if cfg.Format == "json" {
 		encoder = zapcore.NewJSONEncoder(encoderConfig)
-	default:
+	} else {
 		encoder = zapcore.NewConsoleEncoder(encoderConfig)
 	}
 
@@ -71,6 +73,7 @@ func New(cfg Config) (*zap.Logger, error) {
 	return zap.New(core), nil
 }
 
+// WithComponent добавляет к логгеру стабильное поле component.
 func WithComponent(base *zap.Logger, component string) *zap.Logger {
 	return base.With(zap.String("component", component))
 }
