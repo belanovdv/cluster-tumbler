@@ -1,7 +1,3 @@
-// Package web содержит embedded HTML UI и static assets.
-//
-// UI является draft-представлением текущего состояния cluster-tumbler.
-// Управление через UI пока не реализовано.
 package web
 
 import (
@@ -13,7 +9,6 @@ import (
 //go:embed assets/*
 var assetsFS embed.FS
 
-// AssetsHandler отдает embedded SVG/CSS/JS assets по /assets/.
 func AssetsHandler() http.Handler {
 	sub, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
@@ -23,13 +18,14 @@ func AssetsHandler() http.Handler {
 	return http.StripPrefix("/assets/", http.FileServer(http.FS(sub)))
 }
 
-// Handler отдает главную HTML-страницу.
 func Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(pageHTML))
 	}
 }
+
+
 
 const pageHTML = `<!doctype html>
 <html lang="ru">
@@ -365,11 +361,11 @@ pre {
 <div class="layout">
   <aside class="rail">
     <div class="logo" title="PT">
-      <img src="/assets/brand-icon.svg" alt="PT"/>
+      <img src="assets/brand-icon.svg" alt="PT"/>
     </div>
 
     <div class="nav-icon active" title="View">
-      <img src="/assets/node-tree_16.svg" alt="View"/>
+      <img src="assets/node-tree_16.svg" alt="View"/>
     </div>
   </aside>
 

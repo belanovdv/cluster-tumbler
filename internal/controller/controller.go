@@ -1,11 +1,3 @@
-// Package controller реализует leader-only orchestration - главный слой управления.
-// Агрегация статусов с конечных точек, принятиерешений и выставление предписаний дял managment_groups
-//
-// Controller:
-//   - агрегирует actual/health management groups;
-//   - пишет aggregate только при смысловом изменении;
-//   - в automatic mode применяет priority-based failover;
-//   - не исполняет реальные actors.
 package controller
 
 import (
@@ -21,7 +13,6 @@ import (
 	"cluster-tumbler/internal/keys"
 	"cluster-tumbler/internal/model"
 	"cluster-tumbler/internal/store"
-
 	"go.uber.org/zap"
 )
 
@@ -43,7 +34,6 @@ type groupRuntime struct {
 	Available       bool
 }
 
-// New создает controller.
 func New(cfg *config.Config, st *store.StateStore, etcdClient *etcd.Client, log *zap.Logger) *Controller {
 	return &Controller{
 		cfg:                  cfg,
@@ -54,7 +44,6 @@ func New(cfg *config.Config, st *store.StateStore, etcdClient *etcd.Client, log 
 	}
 }
 
-// Run запускает периодический reconcile loop.
 func (c *Controller) Run(ctx context.Context) error {
 	c.log.Debug("starting controller loop")
 
@@ -79,7 +68,6 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 }
 
-// Reconcile обрабатывает все cluster groups.
 func (c *Controller) Reconcile(ctx context.Context) error {
 	if !c.store.Ready() {
 		c.log.Debug("state store is not ready, skip reconcile")
@@ -140,11 +128,13 @@ func (c *Controller) reconcileManagementGroup(
 	clusterGroup string,
 	managementGroup string,
 ) (groupRuntime, error) {
+
 	prefix := keys.ManagementGroup(c.cfg.Cluster.ID, clusterGroup, managementGroup)
 	items := c.store.Prefix(prefix)
 
 	now := time.Now().UTC()
 
+	// ---- новая агрегация ----
 	var (
 		seenRoles    bool
 		seenActive   bool
@@ -223,6 +213,8 @@ func (c *Controller) reconcileManagementGroup(
 		}
 	}
 
+	// ---- запись aggregate ----
+
 	actualKey := keys.Actual(c.cfg.Cluster.ID, clusterGroup, managementGroup)
 	healthKey := keys.Health(c.cfg.Cluster.ID, clusterGroup, managementGroup)
 
@@ -279,6 +271,7 @@ func (c *Controller) applyPriorityPolicy(
 	clusterGroup string,
 	groups []groupRuntime,
 ) error {
+
 	bestPriority := 0
 	hasCandidate := false
 
@@ -319,6 +312,7 @@ func (c *Controller) writeDesiredIfChanged(
 	managementGroup string,
 	target model.DesiredState,
 ) error {
+
 	key := keys.Desired(c.cfg.Cluster.ID, clusterGroup, managementGroup)
 
 	raw, exists := c.store.Get(key)
@@ -377,6 +371,7 @@ func (c *Controller) buildActualIfChanged(
 	details string,
 	updatedAt time.Time,
 ) (bool, []byte, error) {
+
 	next := model.ActualDocument{
 		State:     state,
 		UpdatedAt: updatedAt,
@@ -411,6 +406,7 @@ func (c *Controller) buildHealthIfChanged(
 	details string,
 	updatedAt time.Time,
 ) (bool, []byte, error) {
+
 	next := model.HealthDocument{
 		Status:    status,
 		UpdatedAt: updatedAt,

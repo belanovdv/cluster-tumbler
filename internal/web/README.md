@@ -1,4 +1,4 @@
-# internal/web
+## internal/web
 
 Embedded draft Web UI.
 
@@ -10,7 +10,7 @@ Embedded draft Web UI.
 - отображение node/role state;
 - отображение registry/session статуса агентов.
 
-Не реализовано:
+не реализовано:
 - управление через UI;
 - SSE live refresh;
 - history/diff view;

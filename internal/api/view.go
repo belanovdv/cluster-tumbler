@@ -1,6 +1,3 @@
-// Package api view содержит presentation model для UI/API state.
-//
-// View отделяет внутренний TreeNode от стабильного контракта внешних клиентов.
 package api
 
 import (
@@ -10,14 +7,12 @@ import (
 	"cluster-tumbler/internal/store"
 )
 
-// StateView — корневой API response.
 type StateView struct {
 	Ready    bool         `json:"ready"`
 	Revision int64        `json:"revision"`
 	Cluster  *ClusterView `json:"cluster"`
 }
 
-// ClusterView — представление кластера.
 type ClusterView struct {
 	ID         string                                `json:"id"`
 	Leadership json.RawMessage                       `json:"leadership,omitempty"`
@@ -27,32 +22,27 @@ type ClusterView struct {
 	Groups     map[string]*ClusterGroupView          `json:"groups"`
 }
 
-// ClusterGroupView — представление cluster group.
 type ClusterGroupView struct {
 	ManagementGroups map[string]*ManagementGroupView `json:"management_groups"`
 }
 
-// ManagementGroupView — summary одной management group.
 type ManagementGroupView struct {
-	Config  json.RawMessage      `json:"config,omitempty"`
-	Desired json.RawMessage      `json:"desired,omitempty"`
-	Actual  json.RawMessage      `json:"actual,omitempty"`
-	Health  json.RawMessage      `json:"health,omitempty"`
+	Config  json.RawMessage     `json:"config,omitempty"`
+	Desired json.RawMessage     `json:"desired,omitempty"`
+	Actual  json.RawMessage     `json:"actual,omitempty"`
+	Health  json.RawMessage     `json:"health,omitempty"`
 	Nodes   map[string]*NodeView `json:"nodes,omitempty"`
 }
 
-// NodeView — представление node внутри management group.
 type NodeView struct {
 	Roles map[string]*RoleView `json:"roles,omitempty"`
 }
 
-// RoleView — представление role state.
 type RoleView struct {
 	Actual json.RawMessage `json:"actual,omitempty"`
 	Health json.RawMessage `json:"health,omitempty"`
 }
 
-// BuildStateView строит стабильное API-представление из TreeNode.
 func BuildStateView(clusterID string, ready bool, revision int64, root *store.TreeNode) StateView {
 	view := StateView{
 		Ready:    ready,
@@ -180,8 +170,8 @@ func buildManagementGroup(
 	group := &ManagementGroupView{
 		Config:  config,
 		Desired: valueOf(child(managementGroupNode, "desired")),
-		Actual:  valueOf(child(managementGroupNode, "actual")),
-		Health:  valueOf(child(managementGroupNode, "health")),
+		Actual:  ensureDetails(valueOf(child(managementGroupNode, "actual"))),
+		Health:  ensureDetails(valueOf(child(managementGroupNode, "health"))),
 	}
 
 	nodes := make(map[string]*NodeView)
@@ -227,8 +217,8 @@ func buildNode(node *store.TreeNode) *NodeView {
 		}
 
 		roleView := &RoleView{
-			Actual: valueOf(child(role, "actual")),
-			Health: valueOf(child(role, "health")),
+			Actual: ensureDetails(valueOf(child(role, "actual"))),
+			Health: ensureDetails(valueOf(child(role, "health"))),
 		}
 
 		if roleView.Actual != nil || roleView.Health != nil {
@@ -238,6 +228,28 @@ func buildNode(node *store.TreeNode) *NodeView {
 
 	if len(roles) > 0 {
 		out.Roles = roles
+	}
+
+	return out
+}
+
+func ensureDetails(raw json.RawMessage) json.RawMessage {
+	if raw == nil {
+		return nil
+	}
+
+	var obj map[string]interface{}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return raw
+	}
+
+	if _, ok := obj["details"]; !ok {
+		obj["details"] = ""
+	}
+
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return raw
 	}
 
 	return out
@@ -316,3 +328,5 @@ func isManagementSystemKey(name string) bool {
 		return false
 	}
 }
+
+

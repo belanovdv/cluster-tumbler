@@ -1,4 +1,3 @@
-// Package bootstrap создает начальные ключи (idempotent).
 package bootstrap
 
 import (
@@ -10,60 +9,119 @@ import (
 	"cluster-tumbler/internal/etcd"
 	"cluster-tumbler/internal/keys"
 	"cluster-tumbler/internal/model"
-
 	"go.uber.org/zap"
 )
 
-type Bootstrap struct {
+type Bootstrapper struct {
 	cfg  *config.Config
 	etcd *etcd.Client
 	log  *zap.Logger
 }
 
-func New(cfg *config.Config, etcdClient *etcd.Client, log *zap.Logger) *Bootstrap {
-	return &Bootstrap{cfg: cfg, etcd: etcdClient, log: log}
+func New(cfg *config.Config, etcdClient *etcd.Client, log *zap.Logger) *Bootstrapper {
+	return &Bootstrapper{
+		cfg:  cfg,
+		etcd: etcdClient,
+		log:  log,
+	}
 }
 
-// Run — создает initial desired/config если ключей нет
-func (b *Bootstrap) Run(ctx context.Context) error {
-	for _, m := range b.cfg.Agent.Memberships {
+func (b *Bootstrapper) Ensure(ctx context.Context) error {
+	b.log.Debug("starting bootstrap ensure")
 
-		cfgKey := keys.ManagementGroupConfig(
-			b.cfg.Cluster.ID,
-			m.ClusterGroup,
-			m.ManagementGroup,
-		)
+	for _, membership := range b.cfg.Agent.Memberships {
+		if err := b.ensureMembership(ctx, membership); err != nil {
+			return err
+		}
+	}
 
-		doc := model.ManagementGroupConfigDocument{
-			Priority:  m.ManagementGroupPriority,
-			UpdatedAt: time.Now(),
+	b.log.Debug("bootstrap ensure completed")
+	return nil
+}
+
+func (b *Bootstrapper) ensureMembership(ctx context.Context, membership config.MembershipConfig) error {
+	now := time.Now().UTC()
+
+	configDoc := model.ManagementGroupConfigDocument{
+		Priority:  membership.Priority,
+		UpdatedAt: now,
+	}
+
+	configData, err := json.Marshal(configDoc)
+	if err != nil {
+		return err
+	}
+
+	configKey := keys.ManagementGroupConfig(
+		b.cfg.Cluster.ID,
+		membership.ClusterGroup,
+		membership.ManagementGroup,
+	)
+
+	if _, err := b.etcd.TryPutIfAbsent(ctx, configKey, configData); err != nil {
+		return err
+	}
+
+	desired := model.DesiredDocument{
+		State:     model.DesiredIdle,
+		UpdatedAt: now,
+		Details:    "bootstrap",
+	}
+
+	desiredData, err := json.Marshal(desired)
+	if err != nil {
+		return err
+	}
+
+	desiredKey := keys.Desired(b.cfg.Cluster.ID, membership.ClusterGroup, membership.ManagementGroup)
+	if _, err := b.etcd.TryPutIfAbsent(ctx, desiredKey, desiredData); err != nil {
+		return err
+	}
+
+	for _, role := range membership.Roles {
+		actual := model.ActualDocument{
+			State:     model.ActualIdle,
+			UpdatedAt: now,
 		}
 
-		data, _ := json.Marshal(doc)
+		health := model.HealthDocument{
+			Status:    model.HealthWarning,
+			UpdatedAt: now,
+			Details:   "idle",
+		}
 
-		// create if not exists
-		txn := b.etcd.Txn(ctx).
-			If().
-			Then()
-
-		_, err := txn.Commit()
+		actualData, err := json.Marshal(actual)
 		if err != nil {
 			return err
 		}
 
-		_ = b.etcd.Put(ctx, cfgKey, string(data))
-
-		desired := model.DesiredDocument{
-			State:     model.DesiredIdle,
-			UpdatedAt: time.Now(),
+		healthData, err := json.Marshal(health)
+		if err != nil {
+			return err
 		}
 
-		d, _ := json.Marshal(desired)
-
-		_ = b.etcd.Put(ctx,
-			keys.Desired(b.cfg.Cluster.ID, m.ClusterGroup, m.ManagementGroup),
-			string(d),
+		actualKey := keys.RoleActual(
+			b.cfg.Cluster.ID,
+			membership.ClusterGroup,
+			membership.ManagementGroup,
+			b.cfg.Agent.NodeID,
+			role,
 		)
+
+		healthKey := keys.RoleHealth(
+			b.cfg.Cluster.ID,
+			membership.ClusterGroup,
+			membership.ManagementGroup,
+			b.cfg.Agent.NodeID,
+			role,
+		)
+
+		if _, err := b.etcd.TryPutIfAbsent(ctx, actualKey, actualData); err != nil {
+			return err
+		}
+		if _, err := b.etcd.TryPutIfAbsent(ctx, healthKey, healthData); err != nil {
+			return err
+		}
 	}
 
 	return nil

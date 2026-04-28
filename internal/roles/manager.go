@@ -1,10 +1,3 @@
-// Package roles содержит mock role runtime.
-//
-// На текущем этапе реальные actors не вызываются.
-// Worker имитирует выполнение команды:
-//   - читает desired management group;
-//   - ждет 1 секунду;
-//   - записывает actual/health роли.
 package roles
 
 import (
@@ -18,19 +11,18 @@ import (
 	"cluster-tumbler/internal/keys"
 	"cluster-tumbler/internal/model"
 	"cluster-tumbler/internal/store"
-
 	"go.uber.org/zap"
 )
 
 type Manager struct {
-	cfg     *config.Config
-	store   *store.StateStore
-	etcd    *etcd.Client
-	log     *zap.Logger
+	cfg   *config.Config
+	store *store.StateStore
+	etcd  *etcd.Client
+	log   *zap.Logger
+
 	workers []*Worker
 }
 
-// New создает manager и workers по всем ролям локального агента.
 func New(cfg *config.Config, st *store.StateStore, etcdClient *etcd.Client, log *zap.Logger) *Manager {
 	m := &Manager{
 		cfg:   cfg,
@@ -59,7 +51,6 @@ func New(cfg *config.Config, st *store.StateStore, etcdClient *etcd.Client, log 
 	return m
 }
 
-// Run запускает все mock role workers.
 func (m *Manager) Run(ctx context.Context) error {
 	m.log.Debug("starting role manager", zap.Int("workers", len(m.workers)))
 
@@ -85,16 +76,17 @@ func (m *Manager) Run(ctx context.Context) error {
 }
 
 type Worker struct {
-	cfg         *config.Config
-	membership  config.MembershipConfig
-	role        string
-	store       *store.StateStore
-	etcd        *etcd.Client
-	log         *zap.Logger
+	cfg        *config.Config
+	membership config.MembershipConfig
+	role       string
+
+	store *store.StateStore
+	etcd  *etcd.Client
+	log   *zap.Logger
+
 	lastDesired model.DesiredState
 }
 
-// NewWorker создает mock worker конкретной роли.
 func NewWorker(
 	cfg *config.Config,
 	membership config.MembershipConfig,
@@ -104,16 +96,16 @@ func NewWorker(
 	log *zap.Logger,
 ) *Worker {
 	return &Worker{
-		cfg:        cfg,
-		membership: membership,
-		role:       role,
-		store:      st,
-		etcd:       etcdClient,
-		log:        log,
+		cfg:         cfg,
+		membership:  membership,
+		role:        role,
+		store:       st,
+		etcd:        etcdClient,
+		log:         log,
+		lastDesired: "",
 	}
 }
 
-// Run периодически проверяет desired своей management group.
 func (w *Worker) Run(ctx context.Context) error {
 	w.log.Debug("starting mock role worker")
 
