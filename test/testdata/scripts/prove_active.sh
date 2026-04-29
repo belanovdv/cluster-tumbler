@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+NAME="${1:-unknown}"
+FILE="/tmp/ct_${NAME}_start.signal"
+
+sleep 1
+
+if [[ -f "$FILE" ]]; then
+  echo "file $FILE found"
+  exit 0
+else
+  echo "file $FILE not found"
+  exit 1
+fi

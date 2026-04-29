@@ -34,13 +34,23 @@ agent:
         - mc
 
 roles:
-  core:
+  postgresql:
     actors:
-      probe_active: ./actors/core/probe_active.sh
-      set_active: ./actors/core/set_active.sh
-      probe_passive: ./actors/core/probe_passive.sh
-      set_passive: ./actors/core/set_passive.sh
-      force_stop: ./actors/core/force_stop.sh
+      probe_active:
+        - ./test/testdata/scripts/probe_active.sh
+        - pg
+      set_active: 
+        - ./test/testdata/scripts/set_active.sh
+        - pg
+      probe_passive:
+        - ./test/testdata/scripts/probe_passive.sh
+        - pg 
+      set_passive: 
+        - ./test/testdata/scripts/set_passive.sh
+        - pg 
+      force_stop: 
+        - ./test/testdata/scripts/force_stop.sh
+        - pg
     timeouts:
       exec: 5s
       converge: 10s
@@ -48,13 +58,46 @@ roles:
       check_interval: 5s
       details_max_size: 4096
 
+  core:
+    actors:
+      probe_active:
+        - ./test/testdata/scripts/probe_active.sh
+        - core
+      set_active: 
+        - ./test/testdata/scripts/set_active.sh
+        - core
+      probe_passive:
+        - ./test/testdata/scripts/probe_passive.sh
+        - core 
+      set_passive: 
+        - ./test/testdata/scripts/set_passive.sh
+        - mc 
+      force_stop: 
+        - ./test/testdata/scripts/force_stop.sh
+        - core
+    timeouts:
+      exec: 5s
+      converge: 10s
+      retry_interval: 1s
+      check_interval: 5s
+      details_max_size: 4096
   mc:
     actors:
-      probe_active: ./actors/mc/probe_active.sh
-      set_active: ./actors/mc/set_active.sh
-      probe_passive: ./actors/mc/probe_passive.sh
-      set_passive: ./actors/mc/set_passive.sh
-      force_stop: ./actors/mc/force_stop.sh
+      probe_active:
+        - ./test/testdata/scripts/probe_active.sh
+        - mc
+      set_active: 
+        - ./test/testdata/scripts/set_active.sh
+        - mc
+      probe_passive:
+        - ./test/testdata/scripts/probe_passive.sh
+        - mc 
+      set_passive: 
+        - ./test/testdata/scripts/set_passive.sh
+        - mc 
+      force_stop: 
+        - ./test/testdata/scripts/force_stop.sh
+        - mc
     timeouts:
       exec: 5s
       converge: 10s
