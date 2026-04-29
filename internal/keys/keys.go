@@ -30,6 +30,10 @@ func ConfigRoot(clusterID string) string {
 	return path.Join(Root(clusterID), "config")
 }
 
+func ConfigMeta(clusterID string) string {
+	return path.Join(ConfigRoot(clusterID), "_meta")
+}
+
 func ManagementGroupConfig(clusterID, clusterGroup, managementGroup string) string {
 	return path.Join(ConfigRoot(clusterID), clusterGroup, managementGroup)
 }
@@ -59,6 +63,7 @@ func Node(clusterID, clusterGroup, managementGroup, nodeID string) string {
 	if managementGroup == nodeID {
 		return mg
 	}
+
 	return path.Join(mg, nodeID)
 }
 

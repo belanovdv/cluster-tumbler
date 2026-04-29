@@ -54,16 +54,22 @@ type APIConfig struct {
 }
 
 type ClusterConfig struct {
-	ID                  string   `yaml:"id"`
-	Groups              []string `yaml:"groups"`
-	FailoverMode        string   `yaml:"failover_mode"`
-	LeaderTTL           Duration `yaml:"leader_ttl"`
-	LeaderRenewInterval Duration `yaml:"leader_renew_interval"`
-	SessionTTL          Duration `yaml:"session_ttl"`
+	ID                  string                        `yaml:"id"`
+	Name                string                        `yaml:"name"`
+	Groups              map[string]ClusterGroupConfig `yaml:"groups"`
+	FailoverMode        string                        `yaml:"failover_mode"`
+	LeaderTTL           Duration                      `yaml:"leader_ttl"`
+	LeaderRenewInterval Duration                      `yaml:"leader_renew_interval"`
+	SessionTTL          Duration                      `yaml:"session_ttl"`
+}
+
+type ClusterGroupConfig struct {
+	Name string `yaml:"name"`
 }
 
 type AgentConfig struct {
 	NodeID      string             `yaml:"node_id"`
+	Name        string             `yaml:"name"`
 	Memberships []MembershipConfig `yaml:"memberships"`
 }
 
@@ -75,6 +81,7 @@ type MembershipConfig struct {
 }
 
 type RoleConfig struct {
+	Name     string       `yaml:"name"`
 	Actors   RoleActors   `yaml:"actors"`
 	Timeouts RoleTimeouts `yaml:"timeouts"`
 }
@@ -137,6 +144,21 @@ func applyDefaults(cfg *Config) {
 		cfg.Local.Etcd.RetryInterval.Duration = time.Second
 	}
 
+	if cfg.Cluster.Name == "" {
+		cfg.Cluster.Name = cfg.Cluster.ID
+	}
+
+	for groupID, group := range cfg.Cluster.Groups {
+		if group.Name == "" {
+			group.Name = groupID
+		}
+		cfg.Cluster.Groups[groupID] = group
+	}
+
+	if cfg.Agent.Name == "" {
+		cfg.Agent.Name = cfg.Agent.NodeID
+	}
+
 	if cfg.Cluster.FailoverMode == "" {
 		cfg.Cluster.FailoverMode = "manual"
 	}
@@ -154,6 +176,10 @@ func applyDefaults(cfg *Config) {
 	}
 
 	for roleName, role := range cfg.Roles {
+		if role.Name == "" {
+			role.Name = roleName
+		}
+
 		if role.Timeouts.Exec.Duration == 0 {
 			role.Timeouts.Exec.Duration = 5 * time.Second
 		}
@@ -200,8 +226,11 @@ func validate(cfg *Config) error {
 	}
 
 	groupSet := make(map[string]struct{}, len(cfg.Cluster.Groups))
-	for _, group := range cfg.Cluster.Groups {
-		groupSet[group] = struct{}{}
+	for groupID := range cfg.Cluster.Groups {
+		if groupID == "" {
+			return errors.New("cluster.groups contains empty group id")
+		}
+		groupSet[groupID] = struct{}{}
 	}
 
 	for _, membership := range cfg.Agent.Memberships {

@@ -75,7 +75,7 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 		return nil
 	}
 
-	for _, clusterGroup := range c.cfg.Cluster.Groups {
+	for clusterGroup := range c.cfg.Cluster.Groups {
 		groupPrefix := keys.ClusterGroup(c.cfg.Cluster.ID, clusterGroup)
 		managementGroups := c.store.ListChildren(groupPrefix)
 

@@ -30,6 +30,10 @@ func New(cfg *config.Config, etcdClient *etcd.Client, log *zap.Logger) *Bootstra
 func (b *Bootstrapper) Ensure(ctx context.Context) error {
 	b.log.Debug("starting bootstrap ensure")
 
+	if err := b.ensureDynamicConfig(ctx); err != nil {
+		return err
+	}
+
 	for _, membership := range b.cfg.Agent.Memberships {
 		if err := b.ensureMembership(ctx, membership); err != nil {
 			return err
@@ -37,7 +41,156 @@ func (b *Bootstrapper) Ensure(ctx context.Context) error {
 	}
 
 	b.log.Debug("bootstrap ensure completed")
+
 	return nil
+}
+
+func (b *Bootstrapper) ensureDynamicConfig(ctx context.Context) error {
+	key := keys.ConfigMeta(b.cfg.Cluster.ID)
+
+	doc, exists, err := b.loadDynamicConfig(ctx, key)
+	if err != nil {
+		return err
+	}
+
+	changed := false
+	if !exists {
+		doc = model.DynamicConfigDocument{}
+		changed = true
+	}
+
+	if doc.Cluster.ID == "" {
+		doc.Cluster.ID = b.cfg.Cluster.ID
+		changed = true
+	}
+
+	if doc.Cluster.Name == "" {
+		doc.Cluster.Name = b.cfg.Cluster.Name
+		changed = true
+	}
+
+	if doc.ClusterGroups == nil {
+		doc.ClusterGroups = make(map[string]model.DynamicConfigNameDocument)
+		changed = true
+	}
+
+	for groupID, groupCfg := range b.cfg.Cluster.Groups {
+		item, ok := doc.ClusterGroups[groupID]
+		if !ok {
+			doc.ClusterGroups[groupID] = model.DynamicConfigNameDocument{
+				ID:   groupID,
+				Name: groupCfg.Name,
+			}
+			changed = true
+			continue
+		}
+
+		if item.ID == "" {
+			item.ID = groupID
+			changed = true
+		}
+
+		if item.Name == "" {
+			item.Name = groupCfg.Name
+			changed = true
+		}
+
+		doc.ClusterGroups[groupID] = item
+	}
+
+	if doc.Roles == nil {
+		doc.Roles = make(map[string]model.DynamicConfigNameDocument)
+		changed = true
+	}
+
+	for roleID, roleCfg := range b.cfg.Roles {
+		item, ok := doc.Roles[roleID]
+		if !ok {
+			doc.Roles[roleID] = model.DynamicConfigNameDocument{
+				ID:   roleID,
+				Name: roleCfg.Name,
+			}
+			changed = true
+			continue
+		}
+
+		if item.ID == "" {
+			item.ID = roleID
+			changed = true
+		}
+
+		if item.Name == "" {
+			item.Name = roleCfg.Name
+			changed = true
+		}
+
+		doc.Roles[roleID] = item
+	}
+
+	if doc.Nodes == nil {
+		doc.Nodes = make(map[string]model.DynamicConfigNameDocument)
+		changed = true
+	}
+
+	nodeID := b.cfg.Agent.NodeID
+	node, ok := doc.Nodes[nodeID]
+	if !ok {
+		doc.Nodes[nodeID] = model.DynamicConfigNameDocument{
+			ID:   nodeID,
+			Name: b.cfg.Agent.Name,
+		}
+		changed = true
+	} else {
+		if node.ID == "" {
+			node.ID = nodeID
+			changed = true
+		}
+
+		if node.Name == "" {
+			node.Name = b.cfg.Agent.Name
+			changed = true
+		}
+
+		doc.Nodes[nodeID] = node
+	}
+
+	if !changed {
+		b.log.Debug("dynamic config is already up to date", zap.String("key", key))
+		return nil
+	}
+
+	doc.UpdatedAt = time.Now().UTC()
+
+	data, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+
+	b.log.Debug("writing dynamic config", zap.String("key", key))
+
+	return b.etcd.Put(ctx, key, data)
+}
+
+func (b *Bootstrapper) loadDynamicConfig(
+	ctx context.Context,
+	key string,
+) (model.DynamicConfigDocument, bool, error) {
+	items, _, err := b.etcd.GetPrefix(ctx, key)
+	if err != nil {
+		return model.DynamicConfigDocument{}, false, err
+	}
+
+	raw, ok := items[key]
+	if !ok {
+		return model.DynamicConfigDocument{}, false, nil
+	}
+
+	var doc model.DynamicConfigDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return model.DynamicConfigDocument{}, false, err
+	}
+
+	return doc, true, nil
 }
 
 func (b *Bootstrapper) ensureMembership(ctx context.Context, membership config.MembershipConfig) error {
@@ -75,6 +228,7 @@ func (b *Bootstrapper) ensureMembership(ctx context.Context, membership config.M
 	}
 
 	desiredKey := keys.Desired(b.cfg.Cluster.ID, membership.ClusterGroup, membership.ManagementGroup)
+
 	if _, err := b.etcd.TryPutIfAbsent(ctx, desiredKey, desiredData); err != nil {
 		return err
 	}
@@ -120,6 +274,7 @@ func (b *Bootstrapper) ensureMembership(ctx context.Context, membership config.M
 		if _, err := b.etcd.TryPutIfAbsent(ctx, actualKey, actualData); err != nil {
 			return err
 		}
+
 		if _, err := b.etcd.TryPutIfAbsent(ctx, healthKey, healthData); err != nil {
 			return err
 		}

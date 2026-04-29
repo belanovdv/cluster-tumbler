@@ -98,3 +98,16 @@ type Command struct {
 	StartedAt       *time.Time    `json:"started_at,omitempty"`
 	FinishedAt      *time.Time    `json:"finished_at,omitempty"`
 }
+
+type DynamicConfigNameDocument struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type DynamicConfigDocument struct {
+	Cluster       DynamicConfigNameDocument            `json:"cluster"`
+	ClusterGroups map[string]DynamicConfigNameDocument `json:"cluster_groups"`
+	Roles         map[string]DynamicConfigNameDocument `json:"roles"`
+	Nodes         map[string]DynamicConfigNameDocument `json:"nodes"`
+	UpdatedAt     time.Time                            `json:"updated_at"`
+}
