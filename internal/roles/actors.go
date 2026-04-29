@@ -14,7 +14,7 @@ type ExecActorRunner struct {
 	DetailsMaxSize int
 }
 
-func (r *ExecActorRunner) Run(ctx context.Context, req ActorRequest) ActorResult {
+func (r *ExecActorRunner) Run(ctx context.Context, req ActorRequest, attempt int) ActorResult {
 	start := time.Now()
 
 	if len(req.Command) == 0 {
@@ -22,6 +22,7 @@ func (r *ExecActorRunner) Run(ctx context.Context, req ActorRequest) ActorResult
 			OK:        false,
 			ErrorType: ErrorExec,
 			Error:     "empty command",
+			Attempt:   attempt,
 			StartedAt: start,
 			EndedAt:   time.Now(),
 		}
@@ -29,12 +30,13 @@ func (r *ExecActorRunner) Run(ctx context.Context, req ActorRequest) ActorResult
 
 	path := req.Command[0]
 
-	// ❗ exec pre-check (NO RETRY scenario)
+	// ❗ hard exec precheck (NO RETRY)
 	if _, err := os.Stat(path); err != nil {
 		return ActorResult{
 			OK:        false,
 			ErrorType: ErrorExec,
-			Error:     "file not accessible: " + err.Error(),
+			Error:     "binary not accessible: " + err.Error(),
+			Attempt:   attempt,
 			StartedAt: start,
 			EndedAt:   time.Now(),
 		}
@@ -61,6 +63,7 @@ func (r *ExecActorRunner) Run(ctx context.Context, req ActorRequest) ActorResult
 	err := cmd.Run()
 
 	res := ActorResult{
+		Attempt:   attempt,
 		StartedAt: start,
 		EndedAt:   time.Now(),
 	}
@@ -78,10 +81,11 @@ func (r *ExecActorRunner) Run(ctx context.Context, req ActorRequest) ActorResult
 		return res
 	}
 
-	// exec failed AFTER start
+	// exec runtime failure
 	if err != nil {
 		res.OK = false
 
+		// script executed but failed
 		if ee, ok := err.(*exec.ExitError); ok {
 			res.ErrorType = ErrorExitCode
 			res.ExitCode = ee.ExitCode()
@@ -89,7 +93,7 @@ func (r *ExecActorRunner) Run(ctx context.Context, req ActorRequest) ActorResult
 			return res
 		}
 
-		// critical exec failure (should NOT retry)
+		// ❗ cannot start process (NO RETRY)
 		res.ErrorType = ErrorExec
 		res.ExitCode = -2
 		res.Error = err.Error()
@@ -99,11 +103,4 @@ func (r *ExecActorRunner) Run(ctx context.Context, req ActorRequest) ActorResult
 	res.OK = true
 	res.ExitCode = 0
 	return res
-}
-
-func trim(s string, max int) string {
-	if max <= 0 || len(s) <= max {
-		return s
-	}
-	return s[:max]
 }

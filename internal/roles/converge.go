@@ -30,71 +30,55 @@ func (e *RoleExecutor) ensure(
 
 		attempt++
 
-		// -------- PROBE --------
+		// ---------- PROBE ----------
 		if cmd, ok := e.Actors[probe]; ok {
-			res := e.Runner.Run(deadlineCtx, e.build(req, probe, cmd))
+			res := e.Runner.Run(deadlineCtx, e.build(req, probe, cmd), attempt)
 
 			if res.OK {
-				return success(target, attempt, res)
+				return success(target, res)
 			}
 
-			// ❗ NO retry if exec error
+			// ❗ no retry on exec_error
 			if res.ErrorType == ErrorExec {
-				return failedActor(res, attempt)
+				return failedActor(res)
 			}
 		}
 
-		// -------- SET --------
+		// ---------- SET ----------
 		if cmd, ok := e.Actors[set]; ok {
-			res := e.Runner.Run(deadlineCtx, e.build(req, set, cmd))
+			res := e.Runner.Run(deadlineCtx, e.build(req, set, cmd), attempt)
 
-			// ❗ NO retry if exec error
+			// ❗ no retry on exec_error
 			if res.ErrorType == ErrorExec {
-				return failedActor(res, attempt)
+				return failedActor(res)
 			}
 		}
 
 		time.Sleep(e.RetryInterval)
 	}
 }
-
-func (e *RoleExecutor) forceStop(ctx context.Context, req RoleRequest) RoleStatus {
-	cmd, ok := e.Actors[ForceStop]
-	if !ok {
-		return success("idle", 0, ActorResult{})
-	}
-
-	res := e.Runner.Run(ctx, e.build(req, ForceStop, cmd))
-
-	if res.ErrorType == ErrorExec {
-		return failedActor(res, 1)
-	}
-
-	if res.OK {
-		return success("idle", 1, res)
-	}
-
-	return failedActor(res, 1)
-}
-
-func (e *RoleExecutor) build(req RoleRequest, name ActorName, cmd []string) ActorRequest {
-	return ActorRequest{
-		Name:            name,
-		Command:         cmd,
-		ClusterGroup:    req.ClusterGroup,
-		ManagementGroup: req.ManagementGroup,
-		NodeID:          req.NodeID,
-		Role:            req.Role,
-		Desired:         req.Desired,
-	}
-}
-
-func success(state string, attempt int, res ActorResult) RoleStatus {
+func success(state string, res ActorResult) RoleStatus {
 	return RoleStatus{
 		State:  state,
 		Health: "ok",
 		Details: map[string]any{
-			"attempt":     attempt,
+			"attempt":     res.Attempt,
+			"stdout":      res.Stdout,
+			"stderr":      res.Stderr,
+			"duration_ms": res.Duration.Milliseconds(),
+		},
+	}
+}
+
+func failedActor(res ActorResult) RoleStatus {
+	return RoleStatus{
+		State:  "failed",
+		Health: "failed",
+		Details: map[string]any{
+			"attempt":     res.Attempt,
+			"error":       res.Error,
+			"error_type":  res.ErrorType,
+			"exit_code":   res.ExitCode,
 			"stdout":      res.Stdout,
 			"stderr":      res.Stderr,
 			"duration_ms": res.Duration.Milliseconds(),
@@ -104,11 +88,9 @@ func success(state string, attempt int, res ActorResult) RoleStatus {
 
 func failed(msg string) RoleStatus {
 	return RoleStatus{
-		State:  "failed",
-		Health: "failed",
-		Details: map[string]any{
-			"error": msg,
-		},
+		State:   "failed",
+		Health:  "failed",
+		Details: map[string]any{"error": msg},
 	}
 }
 
@@ -118,21 +100,5 @@ func failedWith(msg string, d map[string]any) RoleStatus {
 		State:   "failed",
 		Health:  "failed",
 		Details: d,
-	}
-}
-
-func failedActor(res ActorResult, attempt int) RoleStatus {
-	return RoleStatus{
-		State:  "failed",
-		Health: "failed",
-		Details: map[string]any{
-			"attempt":     attempt,
-			"error":       res.Error,
-			"error_type":  res.ErrorType,
-			"exit_code":   res.ExitCode,
-			"stdout":      res.Stdout,
-			"stderr":      res.Stderr,
-			"duration_ms": res.Duration.Milliseconds(),
-		},
 	}
 }

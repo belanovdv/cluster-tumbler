@@ -15,9 +15,9 @@ const (
 type ErrorType string
 
 const (
-	ErrorExec     ErrorType = "exec_error"
-	ErrorExitCode ErrorType = "exit_code"
-	ErrorTimeout  ErrorType = "timeout"
+	ErrorExec     ErrorType = "exec_error" // file missing, permission denied, cannot start
+	ErrorExitCode ErrorType = "exit_code"  // script ran but failed
+	ErrorTimeout  ErrorType = "timeout"    // execution timeout
 )
 
 type ActorRequest struct {
@@ -38,6 +38,8 @@ type ActorResult struct {
 	Stdout string
 	Stderr string
 	Error  string
+
+	Attempt int
 
 	StartedAt time.Time
 	EndedAt   time.Time
