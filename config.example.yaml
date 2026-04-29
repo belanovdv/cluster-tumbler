@@ -18,8 +18,8 @@ cluster:
   id: second_cluster
   name: "custom second_cluster name"
   groups:
-    - geo_dc:
-        name: "custom geo dc name"
+    geo_dc:
+      name: "custom geo dc name"
   failover_mode: manual
   leader_ttl: 2s
   leader_renew_interval: 500ms

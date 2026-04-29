@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -33,6 +35,11 @@ type groupRuntime struct {
 	Actual          model.ActualState
 	Health          model.HealthStatus
 	Available       bool
+}
+
+type expectedRoleState struct {
+	NodeID string
+	Role   string
 }
 
 func New(cfg *config.Config, st *store.StateStore, etcdClient *etcd.Client, log *zap.Logger) *Controller {
@@ -129,13 +136,12 @@ func (c *Controller) reconcileManagementGroup(
 	clusterGroup string,
 	managementGroup string,
 ) (groupRuntime, error) {
-
 	prefix := keys.ManagementGroup(c.cfg.Cluster.ID, clusterGroup, managementGroup)
 	items := c.store.Prefix(prefix)
-
 	now := time.Now().UTC()
 
-	// ---- новая агрегация ----
+	desired := c.readDesired(clusterGroup, managementGroup)
+
 	var (
 		seenRoles    bool
 		seenActive   bool
@@ -147,41 +153,59 @@ func (c *Controller) reconcileManagementGroup(
 	healthStatus := model.HealthWarning
 	details := "empty management group"
 
-	for key, value := range items {
-		if !strings.HasSuffix(key, "/actual") {
-			continue
-		}
-
-		if key == keys.Actual(c.cfg.Cluster.ID, clusterGroup, managementGroup) {
-			continue
-		}
-
-		var actual model.ActualDocument
-		if err := json.Unmarshal(value, &actual); err != nil {
-			c.log.Debug("failed to decode role actual", zap.String("key", key), zap.Error(err))
-			continue
-		}
-
-		seenRoles = true
-
-		switch actual.State {
-		case model.ActualFailed:
+	if desired != model.DesiredIdle {
+		missing := c.missingExpectedRoleStates(clusterGroup, managementGroup)
+		if len(missing) > 0 {
 			actualState = model.ActualFailed
 			healthStatus = model.HealthFailed
-			details = "one or more roles are failed"
+			details = "agent lost"
 
-		case model.ActualActive:
-			seenActive = true
-
-		case model.ActualPassive:
-			seenPassive = true
-
-		case model.ActualStarting, model.ActualStopping, model.ActualIdle:
-			seenUnstable = true
+			c.log.Debug(
+				"detected missing expected role state",
+				zap.String("cluster_group", clusterGroup),
+				zap.String("management_group", managementGroup),
+				zap.Strings("missing", missing),
+			)
 		}
+	}
 
-		if actualState == model.ActualFailed {
-			break
+	if actualState != model.ActualFailed {
+		for key, value := range items {
+			if !strings.HasSuffix(key, "/actual") {
+				continue
+			}
+
+			if key == keys.Actual(c.cfg.Cluster.ID, clusterGroup, managementGroup) {
+				continue
+			}
+
+			var actual model.ActualDocument
+			if err := json.Unmarshal(value, &actual); err != nil {
+				c.log.Debug("failed to decode role actual", zap.String("key", key), zap.Error(err))
+				continue
+			}
+
+			seenRoles = true
+
+			switch actual.State {
+			case model.ActualFailed:
+				actualState = model.ActualFailed
+				healthStatus = model.HealthFailed
+				details = "one or more roles are failed"
+
+			case model.ActualActive:
+				seenActive = true
+
+			case model.ActualPassive:
+				seenPassive = true
+
+			case model.ActualStarting, model.ActualStopping, model.ActualIdle:
+				seenUnstable = true
+			}
+
+			if actualState == model.ActualFailed {
+				break
+			}
 		}
 	}
 
@@ -213,8 +237,6 @@ func (c *Controller) reconcileManagementGroup(
 			details = "mixed active and passive roles"
 		}
 	}
-
-	// ---- запись aggregate ----
 
 	actualKey := keys.Actual(c.cfg.Cluster.ID, clusterGroup, managementGroup)
 	healthKey := keys.Health(c.cfg.Cluster.ID, clusterGroup, managementGroup)
@@ -267,12 +289,119 @@ func (c *Controller) reconcileManagementGroup(
 	}, nil
 }
 
+func (c *Controller) readDesired(clusterGroup string, managementGroup string) model.DesiredState {
+	key := keys.Desired(c.cfg.Cluster.ID, clusterGroup, managementGroup)
+
+	raw, ok := c.store.Get(key)
+	if !ok {
+		return model.DesiredIdle
+	}
+
+	var doc model.DesiredDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return model.DesiredIdle
+	}
+
+	return doc.State
+}
+
+func (c *Controller) missingExpectedRoleStates(
+	clusterGroup string,
+	managementGroup string,
+) []string {
+	expected := c.expectedRoleStates(clusterGroup, managementGroup)
+	if len(expected) == 0 {
+		return nil
+	}
+
+	missing := make([]string, 0)
+
+	for _, item := range expected {
+		actualKey := keys.RoleActual(
+			c.cfg.Cluster.ID,
+			clusterGroup,
+			managementGroup,
+			item.NodeID,
+			item.Role,
+		)
+
+		healthKey := keys.RoleHealth(
+			c.cfg.Cluster.ID,
+			clusterGroup,
+			managementGroup,
+			item.NodeID,
+			item.Role,
+		)
+
+		if _, ok := c.store.Get(actualKey); !ok {
+			missing = append(missing, item.NodeID+"/"+item.Role+"/actual")
+			continue
+		}
+
+		if _, ok := c.store.Get(healthKey); !ok {
+			missing = append(missing, item.NodeID+"/"+item.Role+"/health")
+			continue
+		}
+	}
+
+	sort.Strings(missing)
+
+	return missing
+}
+
+func (c *Controller) expectedRoleStates(
+	clusterGroup string,
+	managementGroup string,
+) []expectedRoleState {
+	registryItems := c.store.Prefix(keys.RegistryRoot(c.cfg.Cluster.ID))
+	if len(registryItems) == 0 {
+		return nil
+	}
+
+	out := make([]expectedRoleState, 0)
+
+	for key, raw := range registryItems {
+		if strings.Contains(strings.TrimPrefix(key, keys.RegistryRoot(c.cfg.Cluster.ID)+"/"), "/") {
+			continue
+		}
+
+		var reg model.RegistrationDocument
+		if err := json.Unmarshal(raw, &reg); err != nil {
+			c.log.Debug("failed to decode registration", zap.String("key", key), zap.Error(err))
+			continue
+		}
+
+		nodeID := reg.NodeID
+		if nodeID == "" {
+			nodeID = strings.TrimPrefix(key, keys.RegistryRoot(c.cfg.Cluster.ID)+"/")
+		}
+
+		for _, membership := range reg.Memberships {
+			if membership.ClusterGroup != clusterGroup {
+				continue
+			}
+
+			if membership.ManagementGroup != managementGroup {
+				continue
+			}
+
+			for _, role := range membership.Roles {
+				out = append(out, expectedRoleState{
+					NodeID: nodeID,
+					Role:   role,
+				})
+			}
+		}
+	}
+
+	return out
+}
+
 func (c *Controller) applyPriorityPolicy(
 	ctx context.Context,
 	clusterGroup string,
 	groups []groupRuntime,
 ) error {
-
 	bestPriority := 0
 	hasCandidate := false
 
@@ -294,7 +423,6 @@ func (c *Controller) applyPriorityPolicy(
 
 	for _, group := range groups {
 		target := model.DesiredPassive
-
 		if group.Available && group.Priority == bestPriority {
 			target = model.DesiredActive
 		}
@@ -313,7 +441,6 @@ func (c *Controller) writeDesiredIfChanged(
 	managementGroup string,
 	target model.DesiredState,
 ) error {
-
 	key := keys.Desired(c.cfg.Cluster.ID, clusterGroup, managementGroup)
 
 	raw, exists := c.store.Get(key)
@@ -372,7 +499,6 @@ func (c *Controller) buildActualIfChanged(
 	details string,
 	updatedAt time.Time,
 ) (bool, []byte, error) {
-
 	next := model.ActualDocument{
 		State:     state,
 		UpdatedAt: updatedAt,
@@ -407,7 +533,6 @@ func (c *Controller) buildHealthIfChanged(
 	details string,
 	updatedAt time.Time,
 ) (bool, []byte, error) {
-
 	next := model.HealthDocument{
 		Status:    status,
 		UpdatedAt: updatedAt,
@@ -443,4 +568,12 @@ func isSystemKey(name string) bool {
 	default:
 		return false
 	}
+}
+
+func formatMissingRoleStates(missing []string) string {
+	if len(missing) == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("agent lost: %s", strings.Join(missing, ","))
 }

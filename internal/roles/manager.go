@@ -215,6 +215,11 @@ func (w *Worker) cancelCurrentDesired() {
 }
 
 func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
+	if err := w.waitForSessionLease(ctx); err != nil {
+		w.log.Debug("session lease is not ready, skip role execution", zap.Error(err))
+		return
+	}
+
 	roleCfg, ok := w.cfg.Roles[w.role]
 	if !ok {
 		w.writeStatus(ctx, RoleStatus{
@@ -265,7 +270,34 @@ func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
 	w.writeStatus(ctx, status)
 }
 
+func (w *Worker) waitForSessionLease(ctx context.Context) error {
+	if w.etcd.SessionLeaseID() != 0 {
+		return nil
+	}
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if w.etcd.SessionLeaseID() != 0 {
+				return nil
+			}
+
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
 func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
+	leaseID := w.etcd.SessionLeaseID()
+	if leaseID == 0 {
+		w.log.Warn("cannot write role state without session lease")
+		return
+	}
+
 	now := time.Now().UTC()
 
 	details := detailsToString(status.Details)
@@ -311,13 +343,14 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 	)
 
 	w.log.Debug(
-		"writing executed role state",
+		"writing executed role state with session lease",
 		zap.String("actual", string(actual.State)),
 		zap.String("health", string(health.Status)),
 		zap.String("details", details),
+		zap.Int64("lease_id", int64(leaseID)),
 	)
 
-	if err := w.etcd.Put(ctx, actualKey, actualData); err != nil {
+	if err := w.etcd.PutWithLease(ctx, actualKey, actualData, leaseID); err != nil {
 		w.log.Error(
 			"failed to write actual",
 			zap.String("key", actualKey),
@@ -326,7 +359,7 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		return
 	}
 
-	if err := w.etcd.Put(ctx, healthKey, healthData); err != nil {
+	if err := w.etcd.PutWithLease(ctx, healthKey, healthData, leaseID); err != nil {
 		w.log.Error(
 			"failed to write health",
 			zap.String("key", healthKey),

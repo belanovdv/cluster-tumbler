@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"cluster-tumbler/internal/store"
@@ -13,6 +14,9 @@ import (
 type Client struct {
 	cli *clientv3.Client
 	log *zap.Logger
+
+	mu             sync.RWMutex
+	sessionLeaseID clientv3.LeaseID
 }
 
 func New(endpoints []string, dialTimeout time.Duration, log *zap.Logger) (*Client, error) {
@@ -39,6 +43,29 @@ func New(endpoints []string, dialTimeout time.Duration, log *zap.Logger) (*Clien
 func (c *Client) Close() error {
 	c.log.Debug("closing etcd client")
 	return c.cli.Close()
+}
+
+func (c *Client) SetSessionLeaseID(leaseID clientv3.LeaseID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.sessionLeaseID = leaseID
+}
+
+func (c *Client) ClearSessionLeaseID(leaseID clientv3.LeaseID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.sessionLeaseID == leaseID {
+		c.sessionLeaseID = 0
+	}
+}
+
+func (c *Client) SessionLeaseID() clientv3.LeaseID {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return c.sessionLeaseID
 }
 
 func (c *Client) GetPrefix(ctx context.Context, prefix string) (map[string][]byte, int64, error) {
@@ -84,7 +111,6 @@ func (c *Client) WatchPrefix(ctx context.Context, prefix string, fromRevision in
 		}
 
 		watchCh := c.cli.Watch(ctx, prefix, opts...)
-
 		for resp := range watchCh {
 			if err := resp.Err(); err != nil {
 				c.log.Error("etcd watch error", zap.Error(err))
@@ -102,6 +128,7 @@ func (c *Client) WatchPrefix(ctx context.Context, prefix string, fromRevision in
 					Key:      string(ev.Kv.Key),
 					Revision: ev.Kv.ModRevision,
 				}
+
 				if ev.Kv.Value != nil {
 					event.Value = append([]byte(nil), ev.Kv.Value...)
 				}
@@ -127,6 +154,7 @@ func (c *Client) WatchPrefix(ctx context.Context, prefix string, fromRevision in
 
 func (c *Client) Put(ctx context.Context, key string, value []byte, opts ...clientv3.OpOption) error {
 	c.log.Debug("etcd put", zap.String("key", key))
+
 	_, err := c.cli.Put(ctx, key, string(value), opts...)
 	return err
 }
@@ -137,24 +165,23 @@ func (c *Client) PutWithLease(ctx context.Context, key string, value []byte, lea
 
 func (c *Client) Delete(ctx context.Context, key string) error {
 	c.log.Debug("etcd delete", zap.String("key", key))
+
 	_, err := c.cli.Delete(ctx, key)
 	return err
 }
 
 func (c *Client) GrantLease(ctx context.Context, ttlSeconds int64) (clientv3.LeaseID, error) {
-	// c.log.Debug("granting etcd lease", zap.Int64("ttl_seconds", ttlSeconds))
-
 	resp, err := c.cli.Grant(ctx, ttlSeconds)
 	if err != nil {
 		return 0, err
 	}
 
-	// c.log.Debug("etcd lease granted", zap.Int64("lease_id", int64(resp.ID)))
 	return resp.ID, nil
 }
 
 func (c *Client) KeepAlive(ctx context.Context, leaseID clientv3.LeaseID) (<-chan *clientv3.LeaseKeepAliveResponse, error) {
 	c.log.Debug("starting lease keepalive", zap.Int64("lease_id", int64(leaseID)))
+
 	return c.cli.KeepAlive(ctx, leaseID)
 }
 
@@ -178,9 +205,12 @@ func (c *Client) TryPutIfAbsent(ctx context.Context, key string, value []byte) (
 	return txnResp.Succeeded, nil
 }
 
-func (c *Client) TryAcquireLeaseKey(ctx context.Context, key string, value []byte, leaseID clientv3.LeaseID) (bool, error) {
-	// c.log.Debug("trying to acquire lease key", zap.String("key", key), zap.Int64("lease_id", int64(leaseID)))
-
+func (c *Client) TryAcquireLeaseKey(
+	ctx context.Context,
+	key string,
+	value []byte,
+	leaseID clientv3.LeaseID,
+) (bool, error) {
 	txnResp, err := c.cli.Txn(ctx).
 		If(clientv3.Compare(clientv3.CreateRevision(key), "=", 0)).
 		Then(clientv3.OpPut(key, string(value), clientv3.WithLease(leaseID))).
@@ -188,7 +218,5 @@ func (c *Client) TryAcquireLeaseKey(ctx context.Context, key string, value []byt
 	if err != nil {
 		return false, err
 	}
-
-	// c.log.Debug("lease key acquire result", zap.String("key", key), zap.Bool("acquired", txnResp.Succeeded))
 	return txnResp.Succeeded, nil
 }

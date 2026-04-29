@@ -39,6 +39,9 @@ func (m *Manager) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer m.etcd.ClearSessionLeaseID(leaseID)
+
+	m.etcd.SetSessionLeaseID(leaseID)
 
 	now := time.Now().UTC()
 
@@ -66,6 +69,7 @@ func (m *Manager) Run(ctx context.Context) error {
 	registrationKey := keys.Registry(m.cfg.Cluster.ID, m.cfg.Agent.NodeID)
 
 	m.log.Debug("writing global registration", zap.String("key", registrationKey))
+
 	if err := m.etcd.Put(ctx, registrationKey, registrationData); err != nil {
 		return err
 	}
@@ -82,7 +86,12 @@ func (m *Manager) Run(ctx context.Context) error {
 
 	sessionKey := keys.Session(m.cfg.Cluster.ID, m.cfg.Agent.NodeID)
 
-	m.log.Debug("writing global session", zap.String("key", sessionKey), zap.Int64("lease_id", int64(leaseID)))
+	m.log.Debug(
+		"writing global session",
+		zap.String("key", sessionKey),
+		zap.Int64("lease_id", int64(leaseID)),
+	)
+
 	if err := m.etcd.PutWithLease(ctx, sessionKey, sessionData, leaseID); err != nil {
 		return err
 	}

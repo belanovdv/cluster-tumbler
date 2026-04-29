@@ -227,58 +227,19 @@ func (b *Bootstrapper) ensureMembership(ctx context.Context, membership config.M
 		return err
 	}
 
-	desiredKey := keys.Desired(b.cfg.Cluster.ID, membership.ClusterGroup, membership.ManagementGroup)
+	desiredKey := keys.Desired(
+		b.cfg.Cluster.ID,
+		membership.ClusterGroup,
+		membership.ManagementGroup,
+	)
 
 	if _, err := b.etcd.TryPutIfAbsent(ctx, desiredKey, desiredData); err != nil {
 		return err
 	}
 
-	for _, role := range membership.Roles {
-		actual := model.ActualDocument{
-			State:     model.ActualIdle,
-			UpdatedAt: now,
-		}
-
-		health := model.HealthDocument{
-			Status:    model.HealthWarning,
-			UpdatedAt: now,
-			Details:   "idle",
-		}
-
-		actualData, err := json.Marshal(actual)
-		if err != nil {
-			return err
-		}
-
-		healthData, err := json.Marshal(health)
-		if err != nil {
-			return err
-		}
-
-		actualKey := keys.RoleActual(
-			b.cfg.Cluster.ID,
-			membership.ClusterGroup,
-			membership.ManagementGroup,
-			b.cfg.Agent.NodeID,
-			role,
-		)
-
-		healthKey := keys.RoleHealth(
-			b.cfg.Cluster.ID,
-			membership.ClusterGroup,
-			membership.ManagementGroup,
-			b.cfg.Agent.NodeID,
-			role,
-		)
-
-		if _, err := b.etcd.TryPutIfAbsent(ctx, actualKey, actualData); err != nil {
-			return err
-		}
-
-		if _, err := b.etcd.TryPutIfAbsent(ctx, healthKey, healthData); err != nil {
-			return err
-		}
-	}
+	// Role actual/health are runtime keys owned by the agent session lease.
+	// Bootstrap must not create persistent role state, otherwise stale role state
+	// would remain after an agent loss.
 
 	return nil
 }
