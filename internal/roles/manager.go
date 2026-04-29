@@ -3,6 +3,7 @@ package roles
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -16,15 +17,19 @@ import (
 )
 
 type Manager struct {
-	cfg   *config.Config
-	store *store.StateStore
-	etcd  *etcd.Client
-	log   *zap.Logger
-
+	cfg     *config.Config
+	store   *store.StateStore
+	etcd    *etcd.Client
+	log     *zap.Logger
 	workers []*Worker
 }
 
-func New(cfg *config.Config, st *store.StateStore, etcdClient *etcd.Client, log *zap.Logger) *Manager {
+func New(
+	cfg *config.Config,
+	st *store.StateStore,
+	etcdClient *etcd.Client,
+	log *zap.Logger,
+) *Manager {
 	m := &Manager{
 		cfg:   cfg,
 		store: st,
@@ -70,9 +75,11 @@ func (m *Manager) Run(ctx context.Context) error {
 	}
 
 	<-ctx.Done()
+
 	wg.Wait()
 
 	m.log.Debug("role manager stopped")
+
 	return ctx.Err()
 }
 
@@ -80,12 +87,14 @@ type Worker struct {
 	cfg        *config.Config
 	membership config.MembershipConfig
 	role       string
-
-	store *store.StateStore
-	etcd  *etcd.Client
-	log   *zap.Logger
+	store      *store.StateStore
+	etcd       *etcd.Client
+	log        *zap.Logger
 
 	lastDesired model.DesiredState
+
+	mu            sync.Mutex
+	desiredCancel context.CancelFunc
 }
 
 func NewWorker(
@@ -108,7 +117,7 @@ func NewWorker(
 }
 
 func (w *Worker) Run(ctx context.Context) error {
-	w.log.Debug("starting mock role worker")
+	w.log.Debug("starting role worker")
 
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -121,7 +130,8 @@ func (w *Worker) Run(ctx context.Context) error {
 			}
 
 		case <-ctx.Done():
-			w.log.Debug("mock role worker stopped")
+			w.cancelCurrentDesired()
+			w.log.Debug("role worker stopped")
 			return ctx.Err()
 		}
 	}
@@ -145,7 +155,7 @@ func (w *Worker) reconcile(ctx context.Context) error {
 
 	w.lastDesired = desired
 
-	go w.applyDesired(ctx, desired)
+	w.startDesiredExecution(ctx, desired)
 
 	return nil
 }
@@ -164,53 +174,110 @@ func (w *Worker) readDesired() (model.DesiredState, bool) {
 
 	var doc model.DesiredDocument
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		w.log.Debug("failed to decode desired", zap.String("key", key), zap.Error(err))
+		w.log.Debug(
+			"failed to decode desired",
+			zap.String("key", key),
+			zap.Error(err),
+		)
 		return "", false
 	}
 
 	return doc.State, true
 }
 
+func (w *Worker) startDesiredExecution(parent context.Context, desired model.DesiredState) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.desiredCancel != nil {
+		w.desiredCancel()
+		w.desiredCancel = nil
+	}
+
+	ctx, cancel := context.WithCancel(parent)
+	w.desiredCancel = cancel
+
+	go func() {
+		defer cancel()
+
+		w.applyDesired(ctx, desired)
+	}()
+}
+
+func (w *Worker) cancelCurrentDesired() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.desiredCancel != nil {
+		w.desiredCancel()
+		w.desiredCancel = nil
+	}
+}
+
 func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
-	select {
-	case <-time.After(time.Second):
-	case <-ctx.Done():
+	roleCfg, ok := w.cfg.Roles[w.role]
+	if !ok {
+		w.writeStatus(ctx, RoleStatus{
+			State:  string(model.ActualFailed),
+			Health: string(model.HealthFailed),
+			Details: map[string]any{
+				"error": fmt.Sprintf("role %q is not defined in config", w.role),
+			},
+		})
 		return
 	}
 
-	now := time.Now().UTC()
-
-	actualState := model.ActualIdle
-	healthStatus := model.HealthWarning
-	details := ""
-
-	switch desired {
-	case model.DesiredActive:
-		actualState = model.ActualActive
-		healthStatus = model.HealthOK
-
-	case model.DesiredPassive:
-		actualState = model.ActualPassive
-		healthStatus = model.HealthOK
-
-	case model.DesiredIdle:
-		actualState = model.ActualIdle
-		healthStatus = model.HealthWarning
-
-	default:
-		actualState = model.ActualFailed
-		healthStatus = model.HealthFailed
-		details = "unsupported desired state"
+	executor := &RoleExecutor{
+		Runner: &ExecActorRunner{
+			Timeout:        roleCfg.Timeouts.Exec.Duration,
+			DetailsMaxSize: roleCfg.Timeouts.DetailsMaxSize,
+		},
+		Actors:        toExecutorActors(roleCfg.Actors),
+		Converge:      roleCfg.Timeouts.Converge.Duration,
+		RetryInterval: roleCfg.Timeouts.RetryInterval.Duration,
 	}
 
+	w.log.Debug(
+		"executing role desired via actors",
+		zap.String("desired", string(desired)),
+		zap.Duration("exec_timeout", roleCfg.Timeouts.Exec.Duration),
+		zap.Duration("converge", roleCfg.Timeouts.Converge.Duration),
+		zap.Duration("retry_interval", roleCfg.Timeouts.RetryInterval.Duration),
+		zap.Int("actors", len(roleCfg.Actors)),
+	)
+
+	status := executor.Reconcile(ctx, RoleRequest{
+		ClusterGroup:    w.membership.ClusterGroup,
+		ManagementGroup: w.membership.ManagementGroup,
+		NodeID:          w.cfg.Agent.NodeID,
+		Role:            w.role,
+		Desired:         string(desired),
+	})
+
+	w.log.Debug(
+		"role execution finished",
+		zap.String("desired", string(desired)),
+		zap.String("actual", status.State),
+		zap.String("health", status.Health),
+		zap.Any("details", status.Details),
+	)
+
+	w.writeStatus(ctx, status)
+}
+
+func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
+	now := time.Now().UTC()
+
+	details := detailsToString(status.Details)
+
 	actual := model.ActualDocument{
-		State:     actualState,
+		State:     toActualState(status.State),
 		UpdatedAt: now,
 		Details:   details,
 	}
 
 	health := model.HealthDocument{
-		Status:    healthStatus,
+		Status:    toHealthStatus(status.Health),
 		UpdatedAt: now,
 		Details:   details,
 	}
@@ -244,18 +311,82 @@ func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
 	)
 
 	w.log.Debug(
-		"writing mock role state",
-		zap.String("actual", string(actualState)),
-		zap.String("health", string(healthStatus)),
+		"writing executed role state",
+		zap.String("actual", string(actual.State)),
+		zap.String("health", string(health.Status)),
+		zap.String("details", details),
 	)
 
 	if err := w.etcd.Put(ctx, actualKey, actualData); err != nil {
-		w.log.Error("failed to write actual", zap.String("key", actualKey), zap.Error(err))
+		w.log.Error(
+			"failed to write actual",
+			zap.String("key", actualKey),
+			zap.Error(err),
+		)
 		return
 	}
 
 	if err := w.etcd.Put(ctx, healthKey, healthData); err != nil {
-		w.log.Error("failed to write health", zap.String("key", healthKey), zap.Error(err))
+		w.log.Error(
+			"failed to write health",
+			zap.String("key", healthKey),
+			zap.Error(err),
+		)
 		return
 	}
+}
+
+func toExecutorActors(src config.RoleActors) map[ActorName][]string {
+	out := make(map[ActorName][]string, len(src))
+
+	for name, command := range src {
+		out[ActorName(name)] = command
+	}
+
+	return out
+}
+
+func toActualState(state string) model.ActualState {
+	switch state {
+	case string(model.ActualActive):
+		return model.ActualActive
+	case string(model.ActualPassive):
+		return model.ActualPassive
+	case string(model.ActualIdle):
+		return model.ActualIdle
+	case string(model.ActualStarting):
+		return model.ActualStarting
+	case string(model.ActualStopping):
+		return model.ActualStopping
+	case string(model.ActualFailed):
+		return model.ActualFailed
+	default:
+		return model.ActualFailed
+	}
+}
+
+func toHealthStatus(status string) model.HealthStatus {
+	switch status {
+	case string(model.HealthOK):
+		return model.HealthOK
+	case string(model.HealthWarning):
+		return model.HealthWarning
+	case string(model.HealthFailed):
+		return model.HealthFailed
+	default:
+		return model.HealthFailed
+	}
+}
+
+func detailsToString(details map[string]any) string {
+	if len(details) == 0 {
+		return ""
+	}
+
+	data, err := json.Marshal(details)
+	if err != nil {
+		return fmt.Sprintf(`{"error":"failed to marshal details","marshal_error":%q}`, err.Error())
+	}
+
+	return string(data)
 }
