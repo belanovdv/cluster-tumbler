@@ -15,27 +15,27 @@ type ExecActorRunner struct {
 }
 
 func (r *ExecActorRunner) Run(ctx context.Context, req ActorRequest) ActorResult {
-	started := time.Now()
+	start := time.Now()
 
 	if len(req.Command) == 0 {
 		return ActorResult{
 			OK:        false,
 			ErrorType: ErrorExec,
 			Error:     "empty command",
-			StartedAt: started,
+			StartedAt: start,
 			EndedAt:   time.Now(),
 		}
 	}
 
 	path := req.Command[0]
 
-	// ❗ проверка существования
+	// ❗ exec pre-check (NO RETRY scenario)
 	if _, err := os.Stat(path); err != nil {
 		return ActorResult{
 			OK:        false,
 			ErrorType: ErrorExec,
-			Error:     "binary not found: " + err.Error(),
-			StartedAt: started,
+			Error:     "file not accessible: " + err.Error(),
+			StartedAt: start,
 			EndedAt:   time.Now(),
 		}
 	}
@@ -61,10 +61,10 @@ func (r *ExecActorRunner) Run(ctx context.Context, req ActorRequest) ActorResult
 	err := cmd.Run()
 
 	res := ActorResult{
-		StartedAt: started,
+		StartedAt: start,
 		EndedAt:   time.Now(),
 	}
-	res.Duration = res.EndedAt.Sub(started)
+	res.Duration = res.EndedAt.Sub(start)
 
 	res.Stdout = trim(stdout.String(), r.DetailsMaxSize)
 	res.Stderr = trim(stderr.String(), r.DetailsMaxSize)
@@ -78,18 +78,21 @@ func (r *ExecActorRunner) Run(ctx context.Context, req ActorRequest) ActorResult
 		return res
 	}
 
+	// exec failed AFTER start
 	if err != nil {
 		res.OK = false
-		res.ErrorType = ErrorExitCode
-		res.Error = err.Error()
 
 		if ee, ok := err.(*exec.ExitError); ok {
+			res.ErrorType = ErrorExitCode
 			res.ExitCode = ee.ExitCode()
-		} else {
-			// exec не стартовал → не ретраим
-			res.ErrorType = ErrorExec
-			res.ExitCode = -2
+			res.Error = err.Error()
+			return res
 		}
+
+		// critical exec failure (should NOT retry)
+		res.ErrorType = ErrorExec
+		res.ExitCode = -2
+		res.Error = err.Error()
 		return res
 	}
 

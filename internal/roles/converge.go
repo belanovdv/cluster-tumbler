@@ -30,23 +30,25 @@ func (e *RoleExecutor) ensure(
 
 		attempt++
 
-		// --- PROBE ---
+		// -------- PROBE --------
 		if cmd, ok := e.Actors[probe]; ok {
-			res := e.Runner.Run(deadlineCtx, e.buildReq(req, probe, cmd))
+			res := e.Runner.Run(deadlineCtx, e.build(req, probe, cmd))
 
 			if res.OK {
 				return success(target, attempt, res)
 			}
 
+			// ❗ NO retry if exec error
 			if res.ErrorType == ErrorExec {
 				return failedActor(res, attempt)
 			}
 		}
 
-		// --- SET ---
+		// -------- SET --------
 		if cmd, ok := e.Actors[set]; ok {
-			res := e.Runner.Run(deadlineCtx, e.buildReq(req, set, cmd))
+			res := e.Runner.Run(deadlineCtx, e.build(req, set, cmd))
 
+			// ❗ NO retry if exec error
 			if res.ErrorType == ErrorExec {
 				return failedActor(res, attempt)
 			}
@@ -62,7 +64,7 @@ func (e *RoleExecutor) forceStop(ctx context.Context, req RoleRequest) RoleStatu
 		return success("idle", 0, ActorResult{})
 	}
 
-	res := e.Runner.Run(ctx, e.buildReq(req, ForceStop, cmd))
+	res := e.Runner.Run(ctx, e.build(req, ForceStop, cmd))
 
 	if res.ErrorType == ErrorExec {
 		return failedActor(res, 1)
@@ -75,7 +77,7 @@ func (e *RoleExecutor) forceStop(ctx context.Context, req RoleRequest) RoleStatu
 	return failedActor(res, 1)
 }
 
-func (e *RoleExecutor) buildReq(req RoleRequest, name ActorName, cmd []string) ActorRequest {
+func (e *RoleExecutor) build(req RoleRequest, name ActorName, cmd []string) ActorRequest {
 	return ActorRequest{
 		Name:            name,
 		Command:         cmd,
@@ -110,12 +112,12 @@ func failed(msg string) RoleStatus {
 	}
 }
 
-func failedWith(msg string, details map[string]any) RoleStatus {
-	details["error"] = msg
+func failedWith(msg string, d map[string]any) RoleStatus {
+	d["error"] = msg
 	return RoleStatus{
 		State:   "failed",
 		Health:  "failed",
-		Details: details,
+		Details: d,
 	}
 }
 
