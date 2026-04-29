@@ -6,10 +6,11 @@ import (
 	"net/http"
 	"time"
 
-	"cluster-agent/internal/keys"
-	"cluster-agent/internal/model"
-	"cluster-agent/internal/store"
-	"cluster-agent/internal/web"
+	"cluster-tumbler/internal/keys"
+	"cluster-tumbler/internal/model"
+	"cluster-tumbler/internal/store"
+	"cluster-tumbler/internal/web"
+
 	"go.uber.org/zap"
 )
 

@@ -8,11 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"cluster-agent/internal/config"
-	"cluster-agent/internal/etcd"
-	"cluster-agent/internal/keys"
-	"cluster-agent/internal/model"
-	"cluster-agent/internal/store"
+	"cluster-tumbler/internal/config"
+	"cluster-tumbler/internal/etcd"
+	"cluster-tumbler/internal/keys"
+	"cluster-tumbler/internal/model"
+	"cluster-tumbler/internal/store"
+
 	"go.uber.org/zap"
 )
 

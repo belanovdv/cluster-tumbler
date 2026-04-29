@@ -3,7 +3,7 @@ package runtime
 import (
 	"context"
 
-	"cluster-agent/internal/etcd"
+	"cluster-tumbler/internal/etcd"
 )
 
 type apiPutter struct {

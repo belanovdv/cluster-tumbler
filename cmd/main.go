@@ -8,8 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"cluster-agent/internal/config"
-	"cluster-agent/internal/runtime"
+	"cluster-tumbler/internal/config"
+	"cluster-tumbler/internal/runtime"
 )
 
 func main() {

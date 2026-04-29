@@ -1,4 +1,4 @@
-module cluster-agent
+module cluster-tumbler
 
 go 1.23
 
