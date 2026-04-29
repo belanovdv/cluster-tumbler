@@ -38,6 +38,7 @@ agent:
 
 roles:
   postgresql:
+    name: "custom PG mane"
     actors:
       probe_active:
         - ./test/testdata/scripts/probe_active.sh
@@ -62,6 +63,7 @@ roles:
       details_max_size: 4096
 
   core:
+    name: "custom Core mane"
     actors:
       probe_active:
         - ./test/testdata/scripts/probe_active.sh
@@ -85,6 +87,7 @@ roles:
       check_interval: 5s
       details_max_size: 4096
   mc:
+    name: "custom MC mane"
     actors:
       probe_active:
         - ./test/testdata/scripts/probe_active.sh

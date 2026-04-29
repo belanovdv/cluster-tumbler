@@ -408,6 +408,52 @@ function escapeHtml(s) {
     .replaceAll('"', '&quot;');
 }
 
+function displayName(obj, fallback) {
+	if (obj && obj.name) {
+		return obj.name;
+	}
+	return fallback || "";
+}
+
+function secondaryID(obj, fallback) {
+	const id = obj && obj.id ? obj.id : fallback;
+	const name = displayName(obj, fallback);
+
+	if (!id || id === name) {
+		return "";
+	}
+
+	return id;
+}
+
+function titleWithID(obj, fallback) {
+	const name = displayName(obj, fallback);
+	const id = secondaryID(obj, fallback);
+
+	if (!id) {
+		return escapeHtml(name);
+	}
+
+	return escapeHtml(name) + '<div class="muted">' + escapeHtml(id) + '</div>';
+}
+
+function findNodeMeta(nodeName) {
+	const groups = state.cluster.groups || {};
+
+	for (const groupName of Object.keys(groups)) {
+		const mgs = groups[groupName].management_groups || {};
+
+		for (const mgName of Object.keys(mgs)) {
+			const nodes = mgs[mgName].nodes || {};
+			if (nodes[nodeName]) {
+				return nodes[nodeName];
+			}
+		}
+	}
+
+	return { id: nodeName, name: nodeName };
+}
+
 function badge(label, value, kind) {
   const safe = value || "unknown";
   return '<span class="badge ' + kind + '-' + safe + '">' + label + ': ' + escapeHtml(safe) + '</span>';
@@ -440,7 +486,8 @@ function loadDefaultSelection() {
 }
 
 function renderMeta() {
-  document.getElementById("cluster").textContent = "Cluster: " + (state.cluster.id || "—");
+  document.getElementById("cluster").textContent =
+	    "Cluster: " + displayName(state.cluster, state.cluster.id || "—");
   document.getElementById("revision").textContent = "Revision: " + state.revision;
   document.getElementById("ready").textContent = state.ready ? "Ready" : "Not ready";
 
@@ -454,15 +501,16 @@ function renderGroups() {
   let html = "";
 
   for (const groupName of Object.keys(groups)) {
-    html += '<div class="group-title">' + escapeHtml(groupName) + '</div>';
+    const group = groups[groupName];
+      html += '<div class="group-title">' + titleWithID(group, groupName) + '</div>';
 
-    const mgs = groups[groupName].management_groups || {};
+    const mgs = group.management_groups || {};
     for (const mgName of Object.keys(mgs)) {
       const mg = mgs[mgName];
       const isSelected = selected && selected.groupName === groupName && selected.mgName === mgName;
 
       html += '<div class="mg-item ' + (isSelected ? 'selected' : '') + '" onclick="selectMG(\'' + escapeHtml(groupName) + '\', \'' + escapeHtml(mgName) + '\')">';
-      html += '<div class="mg-name">' + escapeHtml(mgName) + '</div>';
+      html += '<div class="mg-name">' + titleWithID(mg, mgName) + '</div>';
       html += '<div class="badges">';
       html += badge("desired", docState(mg.desired), "state");
       html += badge("actual", docState(mg.actual), "state");
@@ -492,9 +540,14 @@ function renderDetails() {
     return;
   }
 
-  const mg = state.cluster.groups[selected.groupName].management_groups[selected.mgName];
+  const group = state.cluster.groups[selected.groupName];
+  const mg = group.management_groups[selected.mgName];
 
-  let html = '<div class="details-title">' + escapeHtml(selected.groupName) + ' / ' + escapeHtml(selected.mgName) + '</div>';
+  let html = '<div class="details-title">' +
+	    titleWithID(group, selected.groupName) +
+	    ' / ' +
+	    titleWithID(mg, selected.mgName) +
+	    '</div>';
 
   html += '<div class="section">';
   html += '<div class="section-title">Summary</div>';
@@ -518,7 +571,7 @@ function renderDetails() {
     const node = nodes[nodeName];
 
     html += '<div class="node-card">';
-    html += '<div class="node-header">' + escapeHtml(nodeName) + '</div>';
+    html += '<div class="node-header">' + titleWithID(node, nodeName) + '</div>';
 
     const roles = node.roles || {};
     const roleNames = Object.keys(roles);
@@ -531,7 +584,7 @@ function renderDetails() {
       const role = roles[roleName];
 
       html += '<div class="role-row">';
-      html += '<div class="role-name">' + escapeHtml(roleName) + '</div>';
+      html += '<div class="role-name">' + titleWithID(role, roleName) + '</div>';
       html += '<div class="badges">';
       html += badge("actual", docState(role.actual), "state");
       html += badge("health", docStatus(role.health), "health");
@@ -566,7 +619,8 @@ function renderRegistry() {
 
     html += '<div class="agent-card">';
     html += '<div class="agent-head">';
-    html += '<div class="agent-name">' + escapeHtml(nodeName) + '</div>';
+    const nodeMeta = findNodeMeta(nodeName);
+    html += '<div class="agent-name">' + titleWithID(nodeMeta, nodeName) + '</div>';
     html += '<div class="status-dot ' + (online ? 'online' : 'offline') + '" title="' + (online ? 'online' : 'offline') + '"></div>';
     html += '</div>';
 

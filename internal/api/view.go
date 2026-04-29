@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"sort"
 
+	"cluster-tumbler/internal/model"
 	"cluster-tumbler/internal/store"
 )
 
@@ -15,6 +16,7 @@ type StateView struct {
 
 type ClusterView struct {
 	ID         string                                `json:"id"`
+	Name       string                                `json:"name"`
 	Leadership json.RawMessage                       `json:"leadership,omitempty"`
 	Config     map[string]map[string]json.RawMessage `json:"config,omitempty"`
 	Registry   map[string]json.RawMessage            `json:"registry,omitempty"`
@@ -23,10 +25,14 @@ type ClusterView struct {
 }
 
 type ClusterGroupView struct {
+	ID               string                          `json:"id"`
+	Name             string                          `json:"name"`
 	ManagementGroups map[string]*ManagementGroupView `json:"management_groups"`
 }
 
 type ManagementGroupView struct {
+	ID      string               `json:"id"`
+	Name    string               `json:"name"`
 	Config  json.RawMessage      `json:"config,omitempty"`
 	Desired json.RawMessage      `json:"desired,omitempty"`
 	Actual  json.RawMessage      `json:"actual,omitempty"`
@@ -35,10 +41,14 @@ type ManagementGroupView struct {
 }
 
 type NodeView struct {
+	ID    string               `json:"id"`
+	Name  string               `json:"name"`
 	Roles map[string]*RoleView `json:"roles,omitempty"`
 }
 
 type RoleView struct {
+	ID     string          `json:"id"`
+	Name   string          `json:"name"`
 	Actual json.RawMessage `json:"actual,omitempty"`
 	Health json.RawMessage `json:"health,omitempty"`
 }
@@ -49,6 +59,7 @@ func BuildStateView(clusterID string, ready bool, revision int64, root *store.Tr
 		Revision: revision,
 		Cluster: &ClusterView{
 			ID:     clusterID,
+			Name:   clusterID,
 			Groups: make(map[string]*ClusterGroupView),
 		},
 	}
@@ -59,6 +70,10 @@ func BuildStateView(clusterID string, ready bool, revision int64, root *store.Tr
 		return view
 	}
 
+	meta := buildDynamicConfigMeta(child(child(clusterNode, "config"), "_meta"))
+
+	view.Cluster.Name = nameOrID(meta.Cluster.Name, clusterID)
+
 	if leadership := child(clusterNode, "leadership"); leadership != nil {
 		view.Cluster.Leadership = valueOf(leadership)
 	}
@@ -67,23 +82,39 @@ func BuildStateView(clusterID string, ready bool, revision int64, root *store.Tr
 	view.Cluster.Registry = buildFlatValueMap(child(clusterNode, "registry"))
 	view.Cluster.Session = buildFlatValueMap(child(clusterNode, "session"))
 
-	for _, clusterGroupName := range sortedChildNames(clusterNode) {
-		if isRootSystemKey(clusterGroupName) {
+	for _, clusterGroupID := range sortedChildNames(clusterNode) {
+		if isRootSystemKey(clusterGroupID) {
 			continue
 		}
 
-		clusterGroupNode := child(clusterNode, clusterGroupName)
+		clusterGroupNode := child(clusterNode, clusterGroupID)
 		if clusterGroupNode == nil {
 			continue
 		}
 
-		view.Cluster.Groups[clusterGroupName] = buildClusterGroup(
+		view.Cluster.Groups[clusterGroupID] = buildClusterGroup(
+			clusterGroupID,
 			clusterGroupNode,
-			view.Cluster.Config[clusterGroupName],
+			view.Cluster.Config[clusterGroupID],
+			meta,
 		)
 	}
 
 	return view
+}
+
+func buildDynamicConfigMeta(node *store.TreeNode) model.DynamicConfigDocument {
+	raw := valueOf(node)
+	if raw == nil {
+		return model.DynamicConfigDocument{}
+	}
+
+	var meta model.DynamicConfigDocument
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return model.DynamicConfigDocument{}
+	}
+
+	return meta
 }
 
 func buildConfig(configRoot *store.TreeNode) map[string]map[string]json.RawMessage {
@@ -93,16 +124,20 @@ func buildConfig(configRoot *store.TreeNode) map[string]map[string]json.RawMessa
 
 	out := make(map[string]map[string]json.RawMessage)
 
-	for _, clusterGroupName := range sortedChildNames(configRoot) {
-		clusterGroupNode := child(configRoot, clusterGroupName)
+	for _, clusterGroupID := range sortedChildNames(configRoot) {
+		if clusterGroupID == "_meta" {
+			continue
+		}
+
+		clusterGroupNode := child(configRoot, clusterGroupID)
 		if clusterGroupNode == nil {
 			continue
 		}
 
-		out[clusterGroupName] = make(map[string]json.RawMessage)
+		out[clusterGroupID] = make(map[string]json.RawMessage)
 
-		for _, managementGroupName := range sortedChildNames(clusterGroupNode) {
-			out[clusterGroupName][managementGroupName] = valueOf(child(clusterGroupNode, managementGroupName))
+		for _, managementGroupID := range sortedChildNames(clusterGroupNode) {
+			out[clusterGroupID][managementGroupID] = valueOf(child(clusterGroupNode, managementGroupID))
 		}
 	}
 
@@ -135,27 +170,34 @@ func buildFlatValueMap(root *store.TreeNode) map[string]json.RawMessage {
 }
 
 func buildClusterGroup(
+	clusterGroupID string,
 	clusterGroupNode *store.TreeNode,
 	config map[string]json.RawMessage,
+	meta model.DynamicConfigDocument,
 ) *ClusterGroupView {
+	groupMeta := meta.ClusterGroups[clusterGroupID]
+
 	out := &ClusterGroupView{
+		ID:               clusterGroupID,
+		Name:             nameOrID(groupMeta.Name, clusterGroupID),
 		ManagementGroups: make(map[string]*ManagementGroupView),
 	}
 
-	for _, managementGroupName := range sortedChildNames(clusterGroupNode) {
-		if isManagementSystemKey(managementGroupName) {
+	for _, managementGroupID := range sortedChildNames(clusterGroupNode) {
+		if isManagementSystemKey(managementGroupID) {
 			continue
 		}
 
-		managementGroupNode := child(clusterGroupNode, managementGroupName)
+		managementGroupNode := child(clusterGroupNode, managementGroupID)
 		if managementGroupNode == nil {
 			continue
 		}
 
-		out.ManagementGroups[managementGroupName] = buildManagementGroup(
-			managementGroupName,
+		out.ManagementGroups[managementGroupID] = buildManagementGroup(
+			managementGroupID,
 			managementGroupNode,
-			config[managementGroupName],
+			config[managementGroupID],
+			meta,
 		)
 	}
 
@@ -163,11 +205,14 @@ func buildClusterGroup(
 }
 
 func buildManagementGroup(
-	managementGroupName string,
+	managementGroupID string,
 	managementGroupNode *store.TreeNode,
 	config json.RawMessage,
+	meta model.DynamicConfigDocument,
 ) *ManagementGroupView {
 	group := &ManagementGroupView{
+		ID:      managementGroupID,
+		Name:    managementGroupID,
 		Config:  config,
 		Desired: valueOf(child(managementGroupNode, "desired")),
 		Actual:  ensureDetails(valueOf(child(managementGroupNode, "actual"))),
@@ -176,23 +221,23 @@ func buildManagementGroup(
 
 	nodes := make(map[string]*NodeView)
 
-	for _, nodeName := range sortedChildNames(managementGroupNode) {
-		if isManagementSystemKey(nodeName) {
+	for _, nodeID := range sortedChildNames(managementGroupNode) {
+		if isManagementSystemKey(nodeID) {
 			continue
 		}
 
-		node := child(managementGroupNode, nodeName)
+		node := child(managementGroupNode, nodeID)
 		if node == nil {
 			continue
 		}
 
 		if looksLikeRoleContainer(node) {
-			nodes[nodeName] = buildNode(node)
+			nodes[nodeID] = buildNode(nodeID, node, meta)
 		}
 	}
 
 	if looksLikeRoleContainer(managementGroupNode) {
-		nodes[managementGroupName] = buildNode(managementGroupNode)
+		nodes[managementGroupID] = buildNode(managementGroupID, managementGroupNode, meta)
 	}
 
 	if len(nodes) > 0 {
@@ -202,27 +247,37 @@ func buildManagementGroup(
 	return group
 }
 
-func buildNode(node *store.TreeNode) *NodeView {
-	out := &NodeView{}
+func buildNode(nodeID string, node *store.TreeNode, meta model.DynamicConfigDocument) *NodeView {
+	nodeMeta := meta.Nodes[nodeID]
+
+	out := &NodeView{
+		ID:   nodeID,
+		Name: nameOrID(nodeMeta.Name, nodeID),
+	}
+
 	roles := make(map[string]*RoleView)
 
-	for _, roleName := range sortedChildNames(node) {
-		if isManagementSystemKey(roleName) {
+	for _, roleID := range sortedChildNames(node) {
+		if isManagementSystemKey(roleID) {
 			continue
 		}
 
-		role := child(node, roleName)
+		role := child(node, roleID)
 		if role == nil {
 			continue
 		}
 
+		roleMeta := meta.Roles[roleID]
+
 		roleView := &RoleView{
+			ID:     roleID,
+			Name:   nameOrID(roleMeta.Name, roleID),
 			Actual: ensureDetails(valueOf(child(role, "actual"))),
 			Health: ensureDetails(valueOf(child(role, "health"))),
 		}
 
 		if roleView.Actual != nil || roleView.Health != nil {
-			roles[roleName] = roleView
+			roles[roleID] = roleView
 		}
 	}
 
@@ -308,7 +363,16 @@ func sortedChildNames(node *store.TreeNode) []string {
 	}
 
 	sort.Strings(names)
+
 	return names
+}
+
+func nameOrID(name string, id string) string {
+	if name != "" {
+		return name
+	}
+
+	return id
 }
 
 func isRootSystemKey(name string) bool {
