@@ -66,6 +66,7 @@ func New(cfg *config.Config) (*Runtime, error) {
 		api: api.New(
 			cfg.Local.API.Listen,
 			cfg.Cluster.ID,
+			cfg.Local.API.Token,
 			st,
 			apiPutter{client: etcdClient},
 			logging.WithComponent(baseLogger, "api"),

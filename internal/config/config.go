@@ -51,6 +51,7 @@ type EtcdConfig struct {
 
 type APIConfig struct {
 	Listen string `yaml:"listen"`
+	Token  string `yaml:"token"`
 }
 
 type ClusterConfig struct {

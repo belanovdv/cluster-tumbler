@@ -27,11 +27,11 @@ cluster:
   session_ttl: 30s
 
 agent:
-  node_id: node1
+  node_id: node2
   name: "custom node1 name"
   memberships:
     - cluster_group: geo_dc
-      management_group: DC1
+      management_group: DC2
       priority: 1
       roles:
         - core

@@ -92,6 +92,7 @@ type Worker struct {
 	log        *zap.Logger
 
 	lastDesired model.DesiredState
+	lastCheckAt time.Time
 
 	mu            sync.Mutex
 	desiredCancel context.CancelFunc
@@ -137,29 +138,6 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 
-func (w *Worker) reconcile(ctx context.Context) error {
-	desired, ok := w.readDesired()
-	if !ok {
-		return nil
-	}
-
-	if desired == w.lastDesired {
-		return nil
-	}
-
-	w.log.Debug(
-		"desired changed",
-		zap.String("desired", string(desired)),
-		zap.String("previous", string(w.lastDesired)),
-	)
-
-	w.lastDesired = desired
-
-	w.startDesiredExecution(ctx, desired)
-
-	return nil
-}
-
 func (w *Worker) readDesired() (model.DesiredState, bool) {
 	key := keys.Desired(
 		w.cfg.Cluster.ID,
@@ -174,7 +152,7 @@ func (w *Worker) readDesired() (model.DesiredState, bool) {
 
 	var doc model.DesiredDocument
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		w.log.Debug(
+		w.log.Warn(
 			"failed to decode desired",
 			zap.String("key", key),
 			zap.Error(err),
@@ -183,6 +161,56 @@ func (w *Worker) readDesired() (model.DesiredState, bool) {
 	}
 
 	return doc.State, true
+}
+
+func (w *Worker) reconcile(ctx context.Context) error {
+	desired, ok := w.readDesired()
+	if !ok {
+		return nil
+	}
+
+	now := time.Now()
+
+	roleCfg, ok := w.cfg.Roles[w.role]
+	if !ok {
+		return nil
+	}
+
+	checkInterval := roleCfg.Timeouts.CheckInterval.Duration
+	if checkInterval <= 0 {
+		checkInterval = 5 * time.Second
+	}
+
+	if desired != w.lastDesired {
+		w.log.Debug(
+			"desired changed",
+			zap.String("desired", string(desired)),
+			zap.String("previous", string(w.lastDesired)),
+		)
+
+		w.lastDesired = desired
+		w.lastCheckAt = now
+
+		w.startDesiredExecution(ctx, desired)
+		return nil
+	}
+
+	if desired == model.DesiredIdle {
+		return nil
+	}
+
+	if w.lastCheckAt.IsZero() || now.Sub(w.lastCheckAt) >= checkInterval {
+		w.log.Debug(
+			"running periodic role convergence check",
+			zap.String("desired", string(desired)),
+			zap.Duration("check_interval", checkInterval),
+		)
+
+		w.lastCheckAt = now
+		w.startDesiredExecution(ctx, desired)
+	}
+
+	return nil
 }
 
 func (w *Worker) startDesiredExecution(parent context.Context, desired model.DesiredState) {

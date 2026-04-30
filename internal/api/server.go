@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"cluster-tumbler/internal/keys"
@@ -21,18 +22,35 @@ type Putter interface {
 type Server struct {
 	addr      string
 	clusterID string
+	token     string
 	store     *store.StateStore
 	putter    Putter
 	log       *zap.Logger
 }
 
-func New(addr string, clusterID string, st *store.StateStore, putter Putter, log *zap.Logger) *Server {
+func New(addr string, clusterID string, token string, st *store.StateStore, putter Putter, log *zap.Logger) *Server {
 	return &Server{
 		addr:      addr,
 		clusterID: clusterID,
+		token:     token,
 		store:     st,
 		putter:    putter,
 		log:       log,
+	}
+}
+
+func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	if s.token == "" {
+		return next
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || bearer != s.token {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
 	}
 }
 
@@ -42,8 +60,8 @@ func (s *Server) Run(ctx context.Context) error {
 
 	mux.Handle("/assets/", web.AssetsHandler())
 	mux.HandleFunc("/", web.Handler())
-	mux.HandleFunc("/api/v1/state", s.handleState)
-	mux.HandleFunc("/api/v1/commands", s.handleCommands)
+	mux.HandleFunc("/api/v1/state", s.requireAuth(s.handleState))
+	mux.HandleFunc("/api/v1/commands", s.requireAuth(s.handleCommands))
 
 	server := &http.Server{
 		Addr:    s.addr,
