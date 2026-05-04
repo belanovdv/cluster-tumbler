@@ -146,7 +146,12 @@ func (c *Controller) reconcileManagementGroup(
 		seenRoles    bool
 		seenActive   bool
 		seenPassive  bool
-		seenUnstable bool
+		seenStarting bool
+		seenStopping bool
+		seenIdle     bool
+
+		latestStartingAt time.Time
+		latestStoppingAt time.Time
 	)
 
 	actualState := model.ActualIdle
@@ -199,8 +204,20 @@ func (c *Controller) reconcileManagementGroup(
 			case model.ActualPassive:
 				seenPassive = true
 
-			case model.ActualStarting, model.ActualStopping, model.ActualIdle:
-				seenUnstable = true
+			case model.ActualStarting:
+				seenStarting = true
+				if actual.UpdatedAt.After(latestStartingAt) {
+					latestStartingAt = actual.UpdatedAt
+				}
+
+			case model.ActualStopping:
+				seenStopping = true
+				if actual.UpdatedAt.After(latestStoppingAt) {
+					latestStoppingAt = actual.UpdatedAt
+				}
+
+			case model.ActualIdle:
+				seenIdle = true
 			}
 
 			if actualState == model.ActualFailed {
@@ -216,7 +233,25 @@ func (c *Controller) reconcileManagementGroup(
 			healthStatus = model.HealthWarning
 			details = "empty management group"
 
-		case seenUnstable:
+		case seenStarting || seenStopping:
+			healthStatus = model.HealthWarning
+			if seenStarting && seenStopping {
+				if latestStartingAt.After(latestStoppingAt) {
+					actualState = model.ActualStarting
+					details = "one or more roles are starting"
+				} else {
+					actualState = model.ActualStopping
+					details = "one or more roles are stopping"
+				}
+			} else if seenStarting {
+				actualState = model.ActualStarting
+				details = "one or more roles are starting"
+			} else {
+				actualState = model.ActualStopping
+				details = "one or more roles are stopping"
+			}
+
+		case seenIdle:
 			actualState = model.ActualIdle
 			healthStatus = model.HealthWarning
 			details = "one or more roles are not stable"

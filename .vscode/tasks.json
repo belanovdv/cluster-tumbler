@@ -1,0 +1,35 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "go build (remote)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-Command",
+        "$r = 'ds-cluster-node1'; $p = '/root/cluster-tumbler'; $l = '${workspaceFolder}'; scp -q -r \"$l\\internal\" \"$l\\cmd\" \"$l\\go.mod\" \"$l\\go.sum\" \"${r}:${p}/\" ; if ($?) { ssh $r \"cd $p && go build ./... 2>&1\" }"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": {
+        "owner": "go",
+        "fileLocation": ["relative", "${workspaceFolder}"],
+        "pattern": {
+          "regexp": "^(.+\\.go):(\\d+):(\\d+)?:?\\s+(.*)",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "message": 4
+        }
+      }
+    }
+  ]
+}
