@@ -40,7 +40,7 @@ type Config struct {
 	Cluster          ClusterConfig                                `yaml:"cluster"`
 	Node             NodeConfig                                   `yaml:"node"`
 	ManagementGroups map[string]map[string]ManagementGroupConfig  `yaml:"management_groups"`
-	Roles            map[string]RoleConfig                        `yaml:"roles"`
+	Roles            RolesMap                                     `yaml:"roles"`
 }
 
 type EtcdConfig struct {
@@ -118,6 +118,72 @@ func (a *ActorCommand) UnmarshalYAML(value *yaml.Node) error {
 // RoleActors maps actor name to command argv.
 type RoleActors map[string]ActorCommand
 
+// RolesMap is a map of role configs that supports a reserved "defaults" key in YAML.
+// When "defaults" is present it is applied as a base to every other role entry,
+// with per-role values taking precedence over defaults (zero value = inherit).
+type RolesMap map[string]RoleConfig
+
+func (m *RolesMap) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.MappingNode {
+		return fmt.Errorf("roles must be a YAML mapping")
+	}
+
+	raw := make(map[string]*yaml.Node, len(value.Content)/2)
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		raw[value.Content[i].Value] = value.Content[i+1]
+	}
+
+	var defaults RoleConfig
+	if node, ok := raw["defaults"]; ok {
+		if err := node.Decode(&defaults); err != nil {
+			return fmt.Errorf("roles.defaults: %w", err)
+		}
+	}
+
+	result := make(RolesMap, len(raw))
+	for key, node := range raw {
+		if key == "defaults" {
+			continue
+		}
+		var role RoleConfig
+		if err := node.Decode(&role); err != nil {
+			return fmt.Errorf("roles.%s: %w", key, err)
+		}
+		result[key] = applyRoleDefaults(role, defaults)
+	}
+
+	*m = result
+	return nil
+}
+
+func applyRoleDefaults(role, def RoleConfig) RoleConfig {
+	if len(role.Actors) == 0 && len(def.Actors) > 0 {
+		actors := make(RoleActors, len(def.Actors))
+		for k, v := range def.Actors {
+			cmd := make(ActorCommand, len(v))
+			copy(cmd, v)
+			actors[k] = cmd
+		}
+		role.Actors = actors
+	}
+	if role.Timeouts.Exec.Duration == 0 {
+		role.Timeouts.Exec = def.Timeouts.Exec
+	}
+	if role.Timeouts.Converge.Duration == 0 {
+		role.Timeouts.Converge = def.Timeouts.Converge
+	}
+	if role.Timeouts.RetryInterval.Duration == 0 {
+		role.Timeouts.RetryInterval = def.Timeouts.RetryInterval
+	}
+	if role.Timeouts.CheckInterval.Duration == 0 {
+		role.Timeouts.CheckInterval = def.Timeouts.CheckInterval
+	}
+	if role.Timeouts.DetailsMaxSize == 0 {
+		role.Timeouts.DetailsMaxSize = def.Timeouts.DetailsMaxSize
+	}
+	return role
+}
+
 type RoleTimeouts struct {
 	Exec           Duration `yaml:"exec"`
 	Converge       Duration `yaml:"converge"`
@@ -152,7 +218,7 @@ func Merge(local *Config, snap *EtcdSnapshot) *Config {
 	}
 
 	// Deep copy Roles
-	merged.Roles = make(map[string]RoleConfig, len(local.Roles))
+	merged.Roles = make(RolesMap, len(local.Roles))
 	for k, v := range local.Roles {
 		actors := make(RoleActors, len(v.Actors))
 		for ak, av := range v.Actors {
