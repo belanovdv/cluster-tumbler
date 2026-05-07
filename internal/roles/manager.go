@@ -266,7 +266,7 @@ func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
 			Timeout:        roleCfg.Timeouts.Exec.Duration,
 			DetailsMaxSize: roleCfg.Timeouts.DetailsMaxSize,
 		},
-		Actors:        toExecutorActors(roleCfg.Actors),
+		Actors:        toExecutorActors(roleCfg.Actors, w.cfg),
 		Converge:      roleCfg.Timeouts.Converge.Duration,
 		RetryInterval: roleCfg.Timeouts.RetryInterval.Duration,
 	}
@@ -445,11 +445,15 @@ func (w *Worker) hasHealthChanged(key string, status model.HealthStatus) bool {
 	return current.Status != status
 }
 
-func toExecutorActors(src config.RoleActors) map[ActorName][]string {
+func toExecutorActors(src config.RoleActors, cfg *config.Config) map[ActorName][]string {
 	out := make(map[ActorName][]string, len(src))
 
 	for name, command := range src {
-		out[ActorName(name)] = command
+		cmd := []string(command)
+		if len(cmd) > 0 {
+			cmd[0] = cfg.ResolveActorPath(cmd[0])
+		}
+		out[ActorName(name)] = cmd
 	}
 
 	return out

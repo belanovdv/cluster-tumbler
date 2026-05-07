@@ -34,6 +34,30 @@ func ConfigMeta(clusterID string) string {
 	return path.Join(ConfigRoot(clusterID), "_meta")
 }
 
+func ConfigNodeRoot(clusterID string) string {
+	return path.Join(ConfigRoot(clusterID), "nodes")
+}
+
+func ConfigNode(clusterID, nodeID string) string {
+	return path.Join(ConfigNodeRoot(clusterID), nodeID)
+}
+
+func ConfigRoleRoot(clusterID string) string {
+	return path.Join(ConfigRoot(clusterID), "roles")
+}
+
+func ConfigRole(clusterID, roleID string) string {
+	return path.Join(ConfigRoleRoot(clusterID), roleID)
+}
+
+func ConfigClusterGroupRoot(clusterID string) string {
+	return path.Join(ConfigRoot(clusterID), "cluster_groups")
+}
+
+func ConfigClusterGroup(clusterID, groupID string) string {
+	return path.Join(ConfigClusterGroupRoot(clusterID), groupID)
+}
+
 func ManagementGroupConfig(clusterID, clusterGroup, managementGroup string) string {
 	return path.Join(ConfigRoot(clusterID), clusterGroup, managementGroup)
 }

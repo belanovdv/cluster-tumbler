@@ -70,15 +70,16 @@ func BuildStateView(clusterID string, ready bool, revision int64, root *store.Tr
 		return view
 	}
 
-	meta := buildDynamicConfigMeta(child(child(clusterNode, "config"), "_meta"))
+	configRoot := child(clusterNode, "config")
+	meta := buildViewMeta(configRoot)
 
-	view.Cluster.Name = nameOrID(meta.Cluster.Name, clusterID)
+	view.Cluster.Name = nameOrID(meta.clusterName, clusterID)
 
 	if leadership := child(clusterNode, "leadership"); leadership != nil {
 		view.Cluster.Leadership = valueOf(leadership)
 	}
 
-	view.Cluster.Config = buildConfig(child(clusterNode, "config"))
+	view.Cluster.Config = buildConfig(configRoot)
 	view.Cluster.Registry = buildFlatValueMap(child(clusterNode, "registry"))
 	view.Cluster.Session = buildFlatValueMap(child(clusterNode, "session"))
 
@@ -103,18 +104,70 @@ func BuildStateView(clusterID string, ready bool, revision int64, root *store.Tr
 	return view
 }
 
-func buildDynamicConfigMeta(node *store.TreeNode) model.DynamicConfigDocument {
-	raw := valueOf(node)
-	if raw == nil {
-		return model.DynamicConfigDocument{}
+// viewMeta aggregates display names loaded from separate config keys in the etcd tree.
+type viewMeta struct {
+	clusterName string
+	groupNames  map[string]string
+	nodeNames   map[string]string
+	roleNames   map[string]string
+}
+
+func buildViewMeta(configRoot *store.TreeNode) viewMeta {
+	m := viewMeta{
+		groupNames: make(map[string]string),
+		nodeNames:  make(map[string]string),
+		roleNames:  make(map[string]string),
 	}
 
-	var meta model.DynamicConfigDocument
-	if err := json.Unmarshal(raw, &meta); err != nil {
-		return model.DynamicConfigDocument{}
+	if configRoot == nil {
+		return m
 	}
 
-	return meta
+	// Cluster name from config/_meta
+	if raw := valueOf(child(configRoot, "_meta")); raw != nil {
+		var doc model.ClusterConfigDocument
+		if err := json.Unmarshal(raw, &doc); err == nil {
+			m.clusterName = doc.Name
+		}
+	}
+
+	// Group names from config/cluster_groups/{id}
+	if groupsNode := child(configRoot, "cluster_groups"); groupsNode != nil {
+		for _, id := range sortedChildNames(groupsNode) {
+			if raw := valueOf(child(groupsNode, id)); raw != nil {
+				var doc model.ClusterGroupConfigDocument
+				if err := json.Unmarshal(raw, &doc); err == nil && doc.Name != "" {
+					m.groupNames[id] = doc.Name
+				}
+			}
+		}
+	}
+
+	// Node names from config/nodes/{id}
+	if nodesNode := child(configRoot, "nodes"); nodesNode != nil {
+		for _, id := range sortedChildNames(nodesNode) {
+			if raw := valueOf(child(nodesNode, id)); raw != nil {
+				var doc model.NodeConfigDocument
+				if err := json.Unmarshal(raw, &doc); err == nil && doc.Name != "" {
+					m.nodeNames[id] = doc.Name
+				}
+			}
+		}
+	}
+
+	// Role names from config/roles/{id}
+	if rolesNode := child(configRoot, "roles"); rolesNode != nil {
+		for _, id := range sortedChildNames(rolesNode) {
+			if raw := valueOf(child(rolesNode, id)); raw != nil {
+				var doc model.RoleConfigDocument
+				if err := json.Unmarshal(raw, &doc); err == nil && doc.Name != "" {
+					m.roleNames[id] = doc.Name
+				}
+			}
+		}
+	}
+
+	return m
 }
 
 func buildConfig(configRoot *store.TreeNode) map[string]map[string]json.RawMessage {
@@ -125,7 +178,7 @@ func buildConfig(configRoot *store.TreeNode) map[string]map[string]json.RawMessa
 	out := make(map[string]map[string]json.RawMessage)
 
 	for _, clusterGroupID := range sortedChildNames(configRoot) {
-		if clusterGroupID == "_meta" {
+		if isConfigSystemKey(clusterGroupID) {
 			continue
 		}
 
@@ -173,13 +226,11 @@ func buildClusterGroup(
 	clusterGroupID string,
 	clusterGroupNode *store.TreeNode,
 	config map[string]json.RawMessage,
-	meta model.DynamicConfigDocument,
+	meta viewMeta,
 ) *ClusterGroupView {
-	groupMeta := meta.ClusterGroups[clusterGroupID]
-
 	out := &ClusterGroupView{
 		ID:               clusterGroupID,
-		Name:             nameOrID(groupMeta.Name, clusterGroupID),
+		Name:             nameOrID(meta.groupNames[clusterGroupID], clusterGroupID),
 		ManagementGroups: make(map[string]*ManagementGroupView),
 	}
 
@@ -208,7 +259,7 @@ func buildManagementGroup(
 	managementGroupID string,
 	managementGroupNode *store.TreeNode,
 	config json.RawMessage,
-	meta model.DynamicConfigDocument,
+	meta viewMeta,
 ) *ManagementGroupView {
 	group := &ManagementGroupView{
 		ID:      managementGroupID,
@@ -247,12 +298,10 @@ func buildManagementGroup(
 	return group
 }
 
-func buildNode(nodeID string, node *store.TreeNode, meta model.DynamicConfigDocument) *NodeView {
-	nodeMeta := meta.Nodes[nodeID]
-
+func buildNode(nodeID string, node *store.TreeNode, meta viewMeta) *NodeView {
 	out := &NodeView{
 		ID:   nodeID,
-		Name: nameOrID(nodeMeta.Name, nodeID),
+		Name: nameOrID(meta.nodeNames[nodeID], nodeID),
 	}
 
 	roles := make(map[string]*RoleView)
@@ -267,11 +316,9 @@ func buildNode(nodeID string, node *store.TreeNode, meta model.DynamicConfigDocu
 			continue
 		}
 
-		roleMeta := meta.Roles[roleID]
-
 		roleView := &RoleView{
 			ID:     roleID,
-			Name:   nameOrID(roleMeta.Name, roleID),
+			Name:   nameOrID(meta.roleNames[roleID], roleID),
 			Actual: ensureDetails(valueOf(child(role, "actual"))),
 			Health: ensureDetails(valueOf(child(role, "health"))),
 		}
@@ -387,6 +434,15 @@ func isRootSystemKey(name string) bool {
 func isManagementSystemKey(name string) bool {
 	switch name {
 	case "desired", "actual", "health":
+		return true
+	default:
+		return false
+	}
+}
+
+func isConfigSystemKey(name string) bool {
+	switch name {
+	case "_meta", "nodes", "roles", "cluster_groups":
 		return true
 	default:
 		return false

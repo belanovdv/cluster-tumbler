@@ -6,6 +6,7 @@ import (
 
 	"cluster-tumbler/internal/api"
 	"cluster-tumbler/internal/bootstrap"
+	"cluster-tumbler/internal/cfgwatch"
 	"cluster-tumbler/internal/config"
 	"cluster-tumbler/internal/controller"
 	"cluster-tumbler/internal/etcd"
@@ -28,6 +29,7 @@ type Runtime struct {
 
 	api        *api.Server
 	bootstrap  *bootstrap.Bootstrapper
+	cfgwatch   *cfgwatch.Watcher
 	session    *session.Manager
 	leader     *leadership.Manager
 	controller *controller.Controller
@@ -75,6 +77,11 @@ func New(cfg *config.Config) (*Runtime, error) {
 			cfg,
 			etcdClient,
 			logging.WithComponent(baseLogger, "bootstrap"),
+		),
+		cfgwatch: cfgwatch.New(
+			cfg,
+			etcdClient,
+			logging.WithComponent(baseLogger, "cfgwatch"),
 		),
 		session: session.New(
 			cfg,
@@ -131,6 +138,12 @@ func (r *Runtime) Run(ctx context.Context) error {
 	}
 
 	go r.watchLoop(ctx, root, revision+1)
+
+	go func() {
+		if err := r.cfgwatch.Run(ctx); err != nil && err != context.Canceled {
+			r.log.Error("config watcher failed", zap.Error(err))
+		}
+	}()
 
 	go func() {
 		if err := r.session.Run(ctx); err != nil && err != context.Canceled {
