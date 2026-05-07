@@ -131,10 +131,10 @@ func buildViewMeta(configRoot *store.TreeNode) viewMeta {
 		}
 	}
 
-	// Group names from config/cluster_groups/{id}
+	// Group names from config/cluster_groups/{id}/_meta
 	if groupsNode := child(configRoot, "cluster_groups"); groupsNode != nil {
 		for _, id := range sortedChildNames(groupsNode) {
-			if raw := valueOf(child(groupsNode, id)); raw != nil {
+			if raw := valueOf(child(child(groupsNode, id), "_meta")); raw != nil {
 				var doc model.ClusterGroupConfigDocument
 				if err := json.Unmarshal(raw, &doc); err == nil && doc.Name != "" {
 					m.groupNames[id] = doc.Name
@@ -171,26 +171,29 @@ func buildViewMeta(configRoot *store.TreeNode) viewMeta {
 }
 
 func buildConfig(configRoot *store.TreeNode) map[string]map[string]json.RawMessage {
-	if configRoot == nil {
+	groupsNode := child(configRoot, "cluster_groups")
+	if groupsNode == nil {
 		return nil
 	}
 
 	out := make(map[string]map[string]json.RawMessage)
 
-	for _, clusterGroupID := range sortedChildNames(configRoot) {
-		if isConfigSystemKey(clusterGroupID) {
+	for _, cgID := range sortedChildNames(groupsNode) {
+		cgNode := child(groupsNode, cgID)
+		if cgNode == nil {
 			continue
 		}
 
-		clusterGroupNode := child(configRoot, clusterGroupID)
-		if clusterGroupNode == nil {
-			continue
+		mgMap := make(map[string]json.RawMessage)
+		for _, mgID := range sortedChildNames(cgNode) {
+			if mgID == "_meta" {
+				continue
+			}
+			mgMap[mgID] = valueOf(child(cgNode, mgID))
 		}
 
-		out[clusterGroupID] = make(map[string]json.RawMessage)
-
-		for _, managementGroupID := range sortedChildNames(clusterGroupNode) {
-			out[clusterGroupID][managementGroupID] = valueOf(child(clusterGroupNode, managementGroupID))
+		if len(mgMap) > 0 {
+			out[cgID] = mgMap
 		}
 	}
 

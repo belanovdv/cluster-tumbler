@@ -96,7 +96,7 @@ func (b *Bootstrapper) ensureClusterConfig(ctx context.Context) error {
 
 // ensureClusterGroup seeds display config for a cluster group.
 func (b *Bootstrapper) ensureClusterGroup(ctx context.Context, groupID string, groupCfg config.ClusterGroupConfig) error {
-	key := keys.ConfigClusterGroup(b.cfg.Cluster.ID, groupID)
+	key := keys.ConfigClusterGroupMeta(b.cfg.Cluster.ID, groupID)
 
 	doc := model.ClusterGroupConfigDocument{
 		ID:        groupID,

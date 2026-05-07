@@ -110,23 +110,26 @@ func (w *Watcher) loadSnapshot(ctx context.Context) (*config.EtcdSnapshot, error
 			}
 
 		case strings.HasPrefix(k, groupsRoot):
-			var doc model.ClusterGroupConfigDocument
-			if err := json.Unmarshal(raw, &doc); err == nil && doc.ID != "" {
-				snap.ClusterGroups[doc.ID] = &doc
-			}
-
-		default:
-			// Management group config at config/{cg}/{mg}
-			rel := strings.TrimPrefix(k, prefix+"/")
+			// config/cluster_groups/{cg}/_meta  → ClusterGroupConfigDocument
+			// config/cluster_groups/{cg}/{mg}    → ManagementGroupConfigDocument
+			rel := strings.TrimPrefix(k, groupsRoot)
 			parts := strings.SplitN(rel, "/", 2)
-			if len(parts) == 2 {
-				cg, mg := parts[0], parts[1]
+			if len(parts) != 2 {
+				break
+			}
+			cg, sub := parts[0], parts[1]
+			if sub == "_meta" {
+				var doc model.ClusterGroupConfigDocument
+				if err := json.Unmarshal(raw, &doc); err == nil && doc.ID != "" {
+					snap.ClusterGroups[cg] = &doc
+				}
+			} else {
 				var doc model.ManagementGroupConfigDocument
 				if err := json.Unmarshal(raw, &doc); err == nil {
 					if snap.ManagementGroups[cg] == nil {
 						snap.ManagementGroups[cg] = make(map[string]*model.ManagementGroupConfigDocument)
 					}
-					snap.ManagementGroups[cg][mg] = &doc
+					snap.ManagementGroups[cg][sub] = &doc
 				}
 			}
 		}
