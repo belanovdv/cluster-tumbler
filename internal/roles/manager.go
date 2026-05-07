@@ -279,13 +279,21 @@ func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
 		zap.Int("actors", len(roleCfg.Actors)),
 	)
 
+	onTransition := func(status RoleStatus) {
+		w.log.Debug("role state transitioning",
+			zap.String("state", status.State),
+			zap.String("health", status.Health),
+		)
+		w.writeStatus(ctx, status)
+	}
+
 	status := executor.Reconcile(ctx, RoleRequest{
 		ClusterGroup:    w.membership.ClusterGroup,
 		ManagementGroup: w.membership.ManagementGroup,
 		NodeID:          w.cfg.Agent.NodeID,
 		Role:            w.role,
 		Desired:         string(desired),
-	})
+	}, onTransition)
 
 	w.log.Debug(
 		"role execution finished",
@@ -342,18 +350,6 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		Details:   details,
 	}
 
-	actualData, err := json.Marshal(actual)
-	if err != nil {
-		w.log.Error("failed to marshal actual", zap.Error(err))
-		return
-	}
-
-	healthData, err := json.Marshal(health)
-	if err != nil {
-		w.log.Error("failed to marshal health", zap.Error(err))
-		return
-	}
-
 	actualKey := keys.RoleActual(
 		w.cfg.Cluster.ID,
 		w.membership.ClusterGroup,
@@ -370,31 +366,82 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		w.role,
 	)
 
+	actualChanged := w.hasActualChanged(actualKey, actual.State)
+	healthChanged := w.hasHealthChanged(healthKey, health.Status)
+
+	if !actualChanged && !healthChanged {
+		return
+	}
+
 	w.log.Debug(
-		"writing executed role state with session lease",
+		"writing role state with session lease",
 		zap.String("actual", string(actual.State)),
 		zap.String("health", string(health.Status)),
 		zap.String("details", details),
 		zap.Int64("lease_id", int64(leaseID)),
 	)
 
-	if err := w.etcd.PutWithLease(ctx, actualKey, actualData, leaseID); err != nil {
-		w.log.Error(
-			"failed to write actual",
-			zap.String("key", actualKey),
-			zap.Error(err),
-		)
-		return
+	if actualChanged {
+		actualData, err := json.Marshal(actual)
+		if err != nil {
+			w.log.Error("failed to marshal actual", zap.Error(err))
+			return
+		}
+
+		if err := w.etcd.PutWithLease(ctx, actualKey, actualData, leaseID); err != nil {
+			w.log.Error(
+				"failed to write actual",
+				zap.String("key", actualKey),
+				zap.Error(err),
+			)
+			return
+		}
 	}
 
-	if err := w.etcd.PutWithLease(ctx, healthKey, healthData, leaseID); err != nil {
-		w.log.Error(
-			"failed to write health",
-			zap.String("key", healthKey),
-			zap.Error(err),
-		)
-		return
+	if healthChanged {
+		healthData, err := json.Marshal(health)
+		if err != nil {
+			w.log.Error("failed to marshal health", zap.Error(err))
+			return
+		}
+
+		if err := w.etcd.PutWithLease(ctx, healthKey, healthData, leaseID); err != nil {
+			w.log.Error(
+				"failed to write health",
+				zap.String("key", healthKey),
+				zap.Error(err),
+			)
+			return
+		}
 	}
+}
+
+func (w *Worker) hasActualChanged(key string, state model.ActualState) bool {
+	raw, ok := w.store.Get(key)
+	if !ok {
+		return true
+	}
+
+	var current model.ActualDocument
+	if err := json.Unmarshal(raw, &current); err != nil {
+		return true
+	}
+
+	return current.State != state
+}
+
+func (w *Worker) hasHealthChanged(key string, status model.HealthStatus) bool {
+	raw, ok := w.store.Get(key)
+	if !ok {
+		return true
+	}
+
+	var current model.HealthDocument
+	if err := json.Unmarshal(raw, &current); err != nil {
+		return true
+	}
+
+	return current.Status != status
 }
 
 func toExecutorActors(src config.RoleActors) map[ActorName][]string {

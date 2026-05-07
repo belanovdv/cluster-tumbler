@@ -11,16 +11,22 @@ func (e *RoleExecutor) ensure(
 	probe ActorName,
 	set ActorName,
 	target string,
+	transitionState string,
+	onTransition func(RoleStatus),
 ) RoleStatus {
 
 	deadlineCtx, cancel := context.WithTimeout(ctx, e.Converge)
 	defer cancel()
 
 	attempt := 0
+	transitioned := false
 
 	for {
 		select {
 		case <-deadlineCtx.Done():
+			if target == "passive" {
+				e.forceStop(ctx, req)
+			}
 			return failedWith("converge timeout", map[string]any{
 				"target":  target,
 				"attempt": attempt,
@@ -41,6 +47,22 @@ func (e *RoleExecutor) ensure(
 			// ❗ no retry on exec_error
 			if res.ErrorType == ErrorExec {
 				return failedActor(res)
+			}
+		}
+
+		// Notify transition on first detected mismatch
+		if !transitioned {
+			transitioned = true
+			if onTransition != nil {
+				onTransition(RoleStatus{
+					State:  transitionState,
+					Health: "warning",
+					Details: map[string]any{
+						"message":    "Convergence in progress",
+						"target":     target,
+						"started_at": time.Now().UTC().Format(time.RFC3339),
+					},
+				})
 			}
 		}
 

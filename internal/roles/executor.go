@@ -57,14 +57,20 @@ func (e *RoleExecutor) forceStop(ctx context.Context, req RoleRequest) RoleStatu
 	return failedActor(res)
 }
 
-func (e *RoleExecutor) Reconcile(ctx context.Context, req RoleRequest) RoleStatus {
+func (e *RoleExecutor) Reconcile(ctx context.Context, req RoleRequest, onTransition func(RoleStatus)) RoleStatus {
 	switch req.Desired {
 	case "active":
-		return e.ensure(ctx, req, ProbeActive, SetActive, "active")
+		return e.ensure(ctx, req, ProbeActive, SetActive, "active", "starting", onTransition)
 	case "passive":
-		return e.ensure(ctx, req, ProbePassive, SetPassive, "passive")
+		return e.ensure(ctx, req, ProbePassive, SetPassive, "passive", "stopping", onTransition)
 	case "idle":
-		return e.forceStop(ctx, req)
+		return RoleStatus{
+			State:  "idle",
+			Health: "warning",
+			Details: map[string]any{
+				"message": "Node is in maintenance mode",
+			},
+		}
 	default:
 		return failed("unsupported desired state")
 	}
