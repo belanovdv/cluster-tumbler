@@ -644,25 +644,30 @@ function renderRegistry() {
   el.innerHTML = html;
 }
 
-async function init() {
-  const res = await fetch('/api/v1/state');
-  state = await res.json();
-
+function render(data) {
+  state = data;
   if (!selected) {
     loadDefaultSelection();
   }
-
   renderMeta();
   renderGroups();
   renderDetails();
   renderRegistry();
 }
 
-init().catch(err => {
-  document.getElementById("groups").innerHTML = '<div class="empty">Failed to load state</div>';
-  document.getElementById("details").innerHTML = '<pre>' + escapeHtml(err.stack || err.message) + '</pre>';
-  document.getElementById("registry").innerHTML = '<div class="empty">Failed to load registry</div>';
-});
+const es = new EventSource('/api/v1/stream');
+
+es.onmessage = (e) => {
+  try {
+    render(JSON.parse(e.data));
+  } catch (err) {
+    console.error('failed to parse state event', err);
+  }
+};
+
+es.onerror = () => {
+  document.getElementById("ready").textContent = 'Disconnected';
+};
 </script>
 </body>
 </html>`

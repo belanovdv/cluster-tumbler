@@ -35,6 +35,7 @@ type StateStore struct {
 	revision int64
 	ready    bool
 	log      *zap.Logger
+	notify   chan struct{}
 }
 
 func New(log *zap.Logger) *StateStore {
@@ -43,7 +44,19 @@ func New(log *zap.Logger) *StateStore {
 			Name:     "",
 			Children: make(map[string]*TreeNode),
 		},
-		log: log,
+		log:    log,
+		notify: make(chan struct{}, 1),
+	}
+}
+
+func (s *StateStore) Notify() <-chan struct{} {
+	return s.notify
+}
+
+func (s *StateStore) sendNotify() {
+	select {
+	case s.notify <- struct{}{}:
+	default:
 	}
 }
 
@@ -66,6 +79,7 @@ func (s *StateStore) LoadSnapshot(items map[string][]byte, revision int64) error
 	s.ready = true
 
 	s.log.Debug("snapshot loaded", zap.Int64("revision", revision))
+	s.sendNotify()
 	return nil
 }
 
@@ -81,6 +95,7 @@ func (s *StateStore) Apply(event Event) error {
 	}
 
 	s.revision = event.Revision
+	s.sendNotify()
 
 	s.log.Debug(
 		"store event applied",

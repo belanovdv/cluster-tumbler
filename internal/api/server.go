@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -61,6 +62,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.Handle("/assets/", web.AssetsHandler())
 	mux.HandleFunc("/", web.Handler())
 	mux.HandleFunc("/api/v1/state", s.requireAuth(s.handleState))
+	mux.HandleFunc("/api/v1/stream", s.requireAuth(s.handleStream))
 	mux.HandleFunc("/api/v1/commands", s.requireAuth(s.handleCommands))
 
 	server := &http.Server{
@@ -88,40 +90,44 @@ func (s *Server) Run(ctx context.Context) error {
 	return nil
 }
 
-/*
-func (s *Server) Run(ctx context.Context) error {
-	mux := http.NewServeMux()
-
-//	mux.HandleFunc("/", s.handleState)
-        mux.HandleFunc("/", web.Handler())
-	mux.HandleFunc("/api/v1/state", s.handleState)
-	mux.HandleFunc("/api/v1/commands", s.handleCommands)
-
-	server := &http.Server{
-		Addr:    s.addr,
-		Handler: mux,
+func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
 	}
 
-	go func() {
-		<-ctx.Done()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
 
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			s.log.Warn("api server shutdown failed", zap.Error(err))
+	send := func() {
+		view := BuildStateView(
+			s.clusterID,
+			s.store.Ready(),
+			s.store.Revision(),
+			s.store.Snapshot(),
+		)
+		data, err := json.Marshal(view)
+		if err != nil {
+			s.log.Error("failed to marshal state for stream", zap.Error(err))
+			return
 		}
-	}()
-
-	s.log.Info("starting api server", zap.String("listen", s.addr))
-
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
 	}
 
-	return nil
+	send()
+
+	for {
+		select {
+		case <-s.store.Notify():
+			send()
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
-*/
 
 func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -200,7 +206,7 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 
-	_ = encoder.Encode(map[string]interface{}{
+	_ = encoder.Encode(map[string]any{
 		"accepted":   true,
 		"command_id": cmd.ID,
 		"status":     cmd.Status,
