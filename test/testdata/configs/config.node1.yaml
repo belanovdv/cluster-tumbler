@@ -30,6 +30,7 @@ cluster:
 node:
   node_id: node1
   name: "custom node1 name"
+  actors_base_dir: "."
   memberships:
     - cluster_group: geo_dc
       management_group: DC1
@@ -43,77 +44,37 @@ management_groups:
         - mc
 
 roles:
-  postgresql:
-    name: "custom PG name"
-    actors:
-      probe_active:
-        - ./test/testdata/scripts/probe_active.sh
-        - pg
-      set_active:
-        - ./test/testdata/scripts/set_active.sh
-        - pg
-      probe_passive:
-        - ./test/testdata/scripts/probe_passive.sh
-        - pg
-      set_passive:
-        - ./test/testdata/scripts/set_passive.sh
-        - pg
-      force_stop:
-        - ./test/testdata/scripts/force_stop.sh
-        - pg
+  defaults:
     timeouts:
       exec: 5s
       converge: 10s
       retry_interval: 1s
       check_interval: 5s
       details_max_size: 4096
+
+  postgresql:
+    name: "custom PG name"
+    actors:
+      probe_active: "test/testdata/scripts/probe_active.sh pg"
+      set_active: "test/testdata/scripts/set_active.sh pg"
+      probe_passive: "test/testdata/scripts/probe_passive.sh pg"
+      set_passive: "test/testdata/scripts/set_passive.sh pg"
+      force_stop: "test/testdata/scripts/force_stop.sh pg"
 
   core:
     name: "custom Core name"
     actors:
-      probe_active:
-        - ./test/testdata/scripts/probe_active.sh
-        - core
-      set_active:
-        - ./test/testdata/scripts/set_active.sh
-        - core
-      probe_passive:
-        - ./test/testdata/scripts/probe_passive.sh
-        - core
-      set_passive:
-        - ./test/testdata/scripts/set_passive.sh
-        - core
-      force_stop:
-        - ./test/testdata/scripts/force_stop.sh
-        - core
-    timeouts:
-      exec: 5s
-      converge: 10s
-      retry_interval: 1s
-      check_interval: 5s
-      details_max_size: 4096
+      probe_active: "test/testdata/scripts/probe_active.sh core"
+      set_active: "test/testdata/scripts/set_active.sh core"
+      probe_passive: "test/testdata/scripts/probe_passive.sh core"
+      set_passive: "test/testdata/scripts/set_passive.sh core"
+      force_stop: "test/testdata/scripts/force_stop.sh core"
 
   mc:
     name: "custom MC name"
     actors:
-      probe_active:
-        - ./test/testdata/scripts/probe_active.sh
-        - mc
-      set_active:
-        - ./test/testdata/scripts/set_active.sh
-        - mc
-      probe_passive:
-        - ./test/testdata/scripts/probe_passive.sh
-        - mc
-      set_passive:
-        - ./test/testdata/scripts/set_passive.sh
-        - mc
-      force_stop:
-        - ./test/testdata/scripts/force_stop.sh
-        - mc
-    timeouts:
-      exec: 5s
-      converge: 10s
-      retry_interval: 1s
-      check_interval: 5s
-      details_max_size: 4096
+      probe_active: "test/testdata/scripts/probe_active.sh mc"
+      set_active: "test/testdata/scripts/set_active.sh mc"
+      probe_passive: "test/testdata/scripts/probe_passive.sh mc"
+      set_passive: "test/testdata/scripts/set_passive.sh mc"
+      force_stop: "test/testdata/scripts/force_stop.sh mc"
