@@ -34,8 +34,36 @@ func ConfigMeta(clusterID string) string {
 	return path.Join(ConfigRoot(clusterID), "_meta")
 }
 
+func ConfigNodeRoot(clusterID string) string {
+	return path.Join(ConfigRoot(clusterID), "nodes")
+}
+
+func ConfigNode(clusterID, nodeID string) string {
+	return path.Join(ConfigNodeRoot(clusterID), nodeID)
+}
+
+func ConfigRoleRoot(clusterID string) string {
+	return path.Join(ConfigRoot(clusterID), "roles")
+}
+
+func ConfigRole(clusterID, roleID string) string {
+	return path.Join(ConfigRoleRoot(clusterID), roleID)
+}
+
+func ConfigClusterGroupRoot(clusterID string) string {
+	return path.Join(ConfigRoot(clusterID), "cluster_groups")
+}
+
+// ConfigClusterGroupMeta returns the key for a cluster group's config document.
+// Stored at config/cluster_groups/{group_id}/_meta alongside its management group keys.
+func ConfigClusterGroupMeta(clusterID, groupID string) string {
+	return path.Join(ConfigClusterGroupRoot(clusterID), groupID, "_meta")
+}
+
+// ManagementGroupConfig returns the key for a management group's config document.
+// Stored at config/cluster_groups/{cg}/{mg} so all group-related config is co-located.
 func ManagementGroupConfig(clusterID, clusterGroup, managementGroup string) string {
-	return path.Join(ConfigRoot(clusterID), clusterGroup, managementGroup)
+	return path.Join(ConfigClusterGroupRoot(clusterID), clusterGroup, managementGroup)
 }
 
 func ClusterGroup(clusterID, clusterGroup string) string {

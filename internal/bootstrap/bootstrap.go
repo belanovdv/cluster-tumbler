@@ -30,11 +30,27 @@ func New(cfg *config.Config, etcdClient *etcd.Client, log *zap.Logger) *Bootstra
 func (b *Bootstrapper) Ensure(ctx context.Context) error {
 	b.log.Debug("starting bootstrap ensure")
 
-	if err := b.ensureDynamicConfig(ctx); err != nil {
+	if err := b.ensureClusterConfig(ctx); err != nil {
 		return err
 	}
 
-	for _, membership := range b.cfg.Agent.Memberships {
+	for groupID, groupCfg := range b.cfg.Cluster.Groups {
+		if err := b.ensureClusterGroup(ctx, groupID, groupCfg); err != nil {
+			return err
+		}
+	}
+
+	for roleID, roleCfg := range b.cfg.Roles {
+		if err := b.ensureRole(ctx, roleID, roleCfg); err != nil {
+			return err
+		}
+	}
+
+	if err := b.ensureNode(ctx); err != nil {
+		return err
+	}
+
+	for _, membership := range b.cfg.Node.Memberships {
 		if err := b.ensureMembership(ctx, membership); err != nil {
 			return err
 		}
@@ -45,159 +61,151 @@ func (b *Bootstrapper) Ensure(ctx context.Context) error {
 	return nil
 }
 
-func (b *Bootstrapper) ensureDynamicConfig(ctx context.Context) error {
+// ensureClusterConfig seeds cluster-wide parameters to config/_meta.
+// Uses TryPutIfAbsent so only the first node to start writes the value;
+// subsequent changes are made by the leader via API.
+func (b *Bootstrapper) ensureClusterConfig(ctx context.Context) error {
 	key := keys.ConfigMeta(b.cfg.Cluster.ID)
 
-	doc, exists, err := b.loadDynamicConfig(ctx, key)
-	if err != nil {
-		return err
+	doc := model.ClusterConfigDocument{
+		ID:                  b.cfg.Cluster.ID,
+		Name:                b.cfg.Cluster.Name,
+		FailoverMode:        b.cfg.Cluster.FailoverMode,
+		LeaderTTL:           b.cfg.Cluster.LeaderTTL.Duration.String(),
+		LeaderRenewInterval: b.cfg.Cluster.LeaderRenewInterval.Duration.String(),
+		SessionTTL:          b.cfg.Cluster.SessionTTL.Duration.String(),
+		UpdatedAt:           time.Now().UTC(),
 	}
-
-	changed := false
-	if !exists {
-		doc = model.DynamicConfigDocument{}
-		changed = true
-	}
-
-	if doc.Cluster.ID == "" {
-		doc.Cluster.ID = b.cfg.Cluster.ID
-		changed = true
-	}
-
-	if doc.Cluster.Name == "" {
-		doc.Cluster.Name = b.cfg.Cluster.Name
-		changed = true
-	}
-
-	if doc.ClusterGroups == nil {
-		doc.ClusterGroups = make(map[string]model.DynamicConfigNameDocument)
-		changed = true
-	}
-
-	for groupID, groupCfg := range b.cfg.Cluster.Groups {
-		item, ok := doc.ClusterGroups[groupID]
-		if !ok {
-			doc.ClusterGroups[groupID] = model.DynamicConfigNameDocument{
-				ID:   groupID,
-				Name: groupCfg.Name,
-			}
-			changed = true
-			continue
-		}
-
-		if item.ID == "" {
-			item.ID = groupID
-			changed = true
-		}
-
-		if item.Name == "" {
-			item.Name = groupCfg.Name
-			changed = true
-		}
-
-		doc.ClusterGroups[groupID] = item
-	}
-
-	if doc.Roles == nil {
-		doc.Roles = make(map[string]model.DynamicConfigNameDocument)
-		changed = true
-	}
-
-	for roleID, roleCfg := range b.cfg.Roles {
-		item, ok := doc.Roles[roleID]
-		if !ok {
-			doc.Roles[roleID] = model.DynamicConfigNameDocument{
-				ID:   roleID,
-				Name: roleCfg.Name,
-			}
-			changed = true
-			continue
-		}
-
-		if item.ID == "" {
-			item.ID = roleID
-			changed = true
-		}
-
-		if item.Name == "" {
-			item.Name = roleCfg.Name
-			changed = true
-		}
-
-		doc.Roles[roleID] = item
-	}
-
-	if doc.Nodes == nil {
-		doc.Nodes = make(map[string]model.DynamicConfigNameDocument)
-		changed = true
-	}
-
-	nodeID := b.cfg.Agent.NodeID
-	node, ok := doc.Nodes[nodeID]
-	if !ok {
-		doc.Nodes[nodeID] = model.DynamicConfigNameDocument{
-			ID:   nodeID,
-			Name: b.cfg.Agent.Name,
-		}
-		changed = true
-	} else {
-		if node.ID == "" {
-			node.ID = nodeID
-			changed = true
-		}
-
-		if node.Name == "" {
-			node.Name = b.cfg.Agent.Name
-			changed = true
-		}
-
-		doc.Nodes[nodeID] = node
-	}
-
-	if !changed {
-		b.log.Debug("dynamic config is already up to date", zap.String("key", key))
-		return nil
-	}
-
-	doc.UpdatedAt = time.Now().UTC()
 
 	data, err := json.Marshal(doc)
 	if err != nil {
 		return err
 	}
 
-	b.log.Debug("writing dynamic config", zap.String("key", key))
-
-	return b.etcd.Put(ctx, key, data)
-}
-
-func (b *Bootstrapper) loadDynamicConfig(
-	ctx context.Context,
-	key string,
-) (model.DynamicConfigDocument, bool, error) {
-	items, _, err := b.etcd.GetPrefix(ctx, key)
+	created, err := b.etcd.TryPutIfAbsent(ctx, key, data)
 	if err != nil {
-		return model.DynamicConfigDocument{}, false, err
+		return err
 	}
 
-	raw, ok := items[key]
-	if !ok {
-		return model.DynamicConfigDocument{}, false, nil
+	if created {
+		b.log.Debug("seeded cluster config", zap.String("key", key))
 	}
 
-	var doc model.DynamicConfigDocument
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return model.DynamicConfigDocument{}, false, err
-	}
-
-	return doc, true, nil
+	return nil
 }
 
+// ensureClusterGroup seeds display config for a cluster group.
+func (b *Bootstrapper) ensureClusterGroup(ctx context.Context, groupID string, groupCfg config.ClusterGroupConfig) error {
+	key := keys.ConfigClusterGroupMeta(b.cfg.Cluster.ID, groupID)
+
+	doc := model.ClusterGroupConfigDocument{
+		ID:        groupID,
+		Name:      groupCfg.Name,
+		UpdatedAt: time.Now().UTC(),
+	}
+
+	data, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+
+	created, err := b.etcd.TryPutIfAbsent(ctx, key, data)
+	if err != nil {
+		return err
+	}
+
+	if created {
+		b.log.Debug("seeded cluster group config", zap.String("key", key))
+	}
+
+	return nil
+}
+
+// ensureRole seeds the full role definition (actors + timeouts) to config/roles/{id}.
+// Uses TryPutIfAbsent — first node wins; leader can override via API.
+func (b *Bootstrapper) ensureRole(ctx context.Context, roleID string, roleCfg config.RoleConfig) error {
+	key := keys.ConfigRole(b.cfg.Cluster.ID, roleID)
+
+	actors := make(map[string][]string, len(roleCfg.Actors))
+	for name, cmd := range roleCfg.Actors {
+		actors[name] = []string(cmd)
+	}
+
+	doc := model.RoleConfigDocument{
+		ID:     roleID,
+		Name:   roleCfg.Name,
+		Actors: actors,
+		Timeouts: model.RoleTimeoutsDocument{
+			Exec:           roleCfg.Timeouts.Exec.Duration.String(),
+			Converge:       roleCfg.Timeouts.Converge.Duration.String(),
+			RetryInterval:  roleCfg.Timeouts.RetryInterval.Duration.String(),
+			CheckInterval:  roleCfg.Timeouts.CheckInterval.Duration.String(),
+			DetailsMaxSize: roleCfg.Timeouts.DetailsMaxSize,
+		},
+		UpdatedAt: time.Now().UTC(),
+	}
+
+	data, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+
+	created, err := b.etcd.TryPutIfAbsent(ctx, key, data)
+	if err != nil {
+		return err
+	}
+
+	if created {
+		b.log.Debug("seeded role config", zap.String("key", key))
+	}
+
+	return nil
+}
+
+// ensureNode writes this node's own config to config/nodes/{node_id}.
+// Uses Put (not TryPutIfAbsent) so that name/membership changes in the
+// local config file are reflected on restart.
+func (b *Bootstrapper) ensureNode(ctx context.Context) error {
+	key := keys.ConfigNode(b.cfg.Cluster.ID, b.cfg.Node.NodeID)
+
+	memberships := make([]model.MembershipRef, len(b.cfg.Node.Memberships))
+	for i, m := range b.cfg.Node.Memberships {
+		memberships[i] = model.MembershipRef{
+			ClusterGroup:    m.ClusterGroup,
+			ManagementGroup: m.ManagementGroup,
+		}
+	}
+
+	doc := model.NodeConfigDocument{
+		ID:          b.cfg.Node.NodeID,
+		Name:        b.cfg.Node.Name,
+		Memberships: memberships,
+		UpdatedAt:   time.Now().UTC(),
+	}
+
+	data, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+
+	if err := b.etcd.Put(ctx, key, data); err != nil {
+		return err
+	}
+
+	b.log.Debug("wrote node config", zap.String("key", key))
+
+	return nil
+}
+
+// ensureMembership seeds management group config and the initial desired state.
 func (b *Bootstrapper) ensureMembership(ctx context.Context, membership config.MembershipConfig) error {
 	now := time.Now().UTC()
 
+	mgCfg := b.cfg.ManagementGroups[membership.ClusterGroup][membership.ManagementGroup]
+
 	configDoc := model.ManagementGroupConfigDocument{
-		Priority:  membership.Priority,
+		Priority:  mgCfg.Priority,
+		Roles:     mgCfg.Roles,
 		UpdatedAt: now,
 	}
 
@@ -212,8 +220,13 @@ func (b *Bootstrapper) ensureMembership(ctx context.Context, membership config.M
 		membership.ManagementGroup,
 	)
 
-	if _, err := b.etcd.TryPutIfAbsent(ctx, configKey, configData); err != nil {
+	created, err := b.etcd.TryPutIfAbsent(ctx, configKey, configData)
+	if err != nil {
 		return err
+	}
+
+	if created {
+		b.log.Debug("seeded management group config", zap.String("key", configKey))
 	}
 
 	desired := model.DesiredDocument{

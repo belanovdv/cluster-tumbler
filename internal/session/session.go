@@ -45,18 +45,19 @@ func (m *Manager) Run(ctx context.Context) error {
 
 	now := time.Now().UTC()
 
-	memberships := make([]model.MembershipDocument, 0, len(m.cfg.Agent.Memberships))
-	for _, membership := range m.cfg.Agent.Memberships {
+	memberships := make([]model.MembershipDocument, 0, len(m.cfg.Node.Memberships))
+	for _, membership := range m.cfg.Node.Memberships {
+		mgCfg := m.cfg.ManagementGroups[membership.ClusterGroup][membership.ManagementGroup]
 		memberships = append(memberships, model.MembershipDocument{
 			ClusterGroup:    membership.ClusterGroup,
 			ManagementGroup: membership.ManagementGroup,
-			Priority:        membership.Priority,
-			Roles:           membership.Roles,
+			Priority:        mgCfg.Priority,
+			Roles:           mgCfg.Roles,
 		})
 	}
 
 	registration := model.RegistrationDocument{
-		NodeID:      m.cfg.Agent.NodeID,
+		NodeID:      m.cfg.Node.NodeID,
 		Memberships: memberships,
 		UpdatedAt:   now,
 	}
@@ -66,7 +67,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		return err
 	}
 
-	registrationKey := keys.Registry(m.cfg.Cluster.ID, m.cfg.Agent.NodeID)
+	registrationKey := keys.Registry(m.cfg.Cluster.ID, m.cfg.Node.NodeID)
 
 	m.log.Debug("writing global registration", zap.String("key", registrationKey))
 
@@ -75,7 +76,7 @@ func (m *Manager) Run(ctx context.Context) error {
 	}
 
 	sessionDoc := model.SessionDocument{
-		NodeID:    m.cfg.Agent.NodeID,
+		NodeID:    m.cfg.Node.NodeID,
 		UpdatedAt: now,
 	}
 
@@ -84,7 +85,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		return err
 	}
 
-	sessionKey := keys.Session(m.cfg.Cluster.ID, m.cfg.Agent.NodeID)
+	sessionKey := keys.Session(m.cfg.Cluster.ID, m.cfg.Node.NodeID)
 
 	m.log.Debug(
 		"writing global session",

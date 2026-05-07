@@ -1,19 +1,20 @@
-local:
-  etcd:
-    endpoints:
-      - ds-cluster-node3.mp10.ptsecurity.ru:2379
-      - ds-cluster-node4.mp10.ptsecurity.ru:2379
-      - ds-cluster-node5.mp10.ptsecurity.ru:2379
-    dial_timeout: 3s
-    retry_interval: 1s
-  logger:
-    level: debug
-    format: plain
-    console: true
-    file: ""
-  api:
-    listen: ":5080"
-    # token: "your-secret-token"  # optional; if set, all /api/v1/* requests require Authorization: Bearer <token>
+etcd:
+  endpoints:
+    - ds-cluster-node3.mp10.ptsecurity.ru:2379
+    - ds-cluster-node4.mp10.ptsecurity.ru:2379
+    - ds-cluster-node5.mp10.ptsecurity.ru:2379
+  dial_timeout: 3s
+  retry_interval: 1s
+
+logger:
+  level: debug
+  format: plain
+  console: true
+  file: ""
+
+api:
+  listen: ":5080"
+  # token: "your-secret-token"  # optional; if set, all /api/v1/* requests require Authorization: Bearer <token>
 
 cluster:
   id: second_cluster
@@ -26,12 +27,16 @@ cluster:
   leader_renew_interval: 500ms
   session_ttl: 30s
 
-agent:
+node:
   node_id: node2
-  name: "custom node1 name"
+  name: "custom node2 name"
   memberships:
     - cluster_group: geo_dc
       management_group: DC2
+
+management_groups:
+  geo_dc:
+    DC2:
       priority: 1
       roles:
         - core
@@ -39,21 +44,21 @@ agent:
 
 roles:
   postgresql:
-    name: "custom PG mane"
+    name: "custom PG name"
     actors:
       probe_active:
         - ./test/testdata/scripts/probe_active.sh
         - pg
-      set_active: 
+      set_active:
         - ./test/testdata/scripts/set_active.sh
         - pg
       probe_passive:
         - ./test/testdata/scripts/probe_passive.sh
-        - pg 
-      set_passive: 
+        - pg
+      set_passive:
         - ./test/testdata/scripts/set_passive.sh
-        - pg 
-      force_stop: 
+        - pg
+      force_stop:
         - ./test/testdata/scripts/force_stop.sh
         - pg
     timeouts:
@@ -64,21 +69,21 @@ roles:
       details_max_size: 4096
 
   core:
-    name: "custom Core mane"
+    name: "custom Core name"
     actors:
       probe_active:
         - ./test/testdata/scripts/probe_active.sh
         - core
-      set_active: 
+      set_active:
         - ./test/testdata/scripts/set_active.sh
         - core
       probe_passive:
         - ./test/testdata/scripts/probe_passive.sh
-        - core 
-      set_passive: 
+        - core
+      set_passive:
         - ./test/testdata/scripts/set_passive.sh
-        - core 
-      force_stop: 
+        - core
+      force_stop:
         - ./test/testdata/scripts/force_stop.sh
         - core
     timeouts:
@@ -87,22 +92,23 @@ roles:
       retry_interval: 1s
       check_interval: 5s
       details_max_size: 4096
+
   mc:
-    name: "custom MC mane"
+    name: "custom MC name"
     actors:
       probe_active:
         - ./test/testdata/scripts/probe_active.sh
         - mc
-      set_active: 
+      set_active:
         - ./test/testdata/scripts/set_active.sh
         - mc
       probe_passive:
         - ./test/testdata/scripts/probe_passive.sh
-        - mc 
-      set_passive: 
+        - mc
+      set_passive:
         - ./test/testdata/scripts/set_passive.sh
-        - mc 
-      force_stop: 
+        - mc
+      force_stop:
         - ./test/testdata/scripts/force_stop.sh
         - mc
     timeouts:

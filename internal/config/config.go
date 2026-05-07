@@ -4,9 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"cluster-tumbler/internal/logging"
+	"cluster-tumbler/internal/model"
 
 	"gopkg.in/yaml.v3"
 )
@@ -31,16 +34,13 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type Config struct {
-	Local   LocalConfig           `yaml:"local"`
-	Cluster ClusterConfig         `yaml:"cluster"`
-	Agent   AgentConfig           `yaml:"agent"`
-	Roles   map[string]RoleConfig `yaml:"roles"`
-}
-
-type LocalConfig struct {
-	Etcd   EtcdConfig     `yaml:"etcd"`
-	Logger logging.Config `yaml:"logger"`
-	API    APIConfig      `yaml:"api"`
+	Etcd             EtcdConfig                                   `yaml:"etcd"`
+	Logger           logging.Config                               `yaml:"logger"`
+	API              APIConfig                                    `yaml:"api"`
+	Cluster          ClusterConfig                                `yaml:"cluster"`
+	Node             NodeConfig                                   `yaml:"node"`
+	ManagementGroups map[string]map[string]ManagementGroupConfig  `yaml:"management_groups"`
+	Roles            map[string]RoleConfig                        `yaml:"roles"`
 }
 
 type EtcdConfig struct {
@@ -68,17 +68,21 @@ type ClusterGroupConfig struct {
 	Name string `yaml:"name"`
 }
 
-type AgentConfig struct {
-	NodeID      string             `yaml:"node_id"`
-	Name        string             `yaml:"name"`
-	Memberships []MembershipConfig `yaml:"memberships"`
+type NodeConfig struct {
+	NodeID        string             `yaml:"node_id"`
+	Name          string             `yaml:"name"`
+	ActorsBaseDir string             `yaml:"actors_base_dir"`
+	Memberships   []MembershipConfig `yaml:"memberships"`
 }
 
 type MembershipConfig struct {
-	ClusterGroup    string   `yaml:"cluster_group"`
-	ManagementGroup string   `yaml:"management_group"`
-	Priority        int      `yaml:"priority"`
-	Roles           []string `yaml:"roles"`
+	ClusterGroup    string `yaml:"cluster_group"`
+	ManagementGroup string `yaml:"management_group"`
+}
+
+type ManagementGroupConfig struct {
+	Priority int      `yaml:"priority"`
+	Roles    []string `yaml:"roles"`
 }
 
 type RoleConfig struct {
@@ -87,14 +91,32 @@ type RoleConfig struct {
 	Timeouts RoleTimeouts `yaml:"timeouts"`
 }
 
+// ActorCommand is an argv list for an actor executable. Accepts both a YAML
+// string ("./script.sh arg") and a YAML sequence (["./script.sh", "arg"]).
+type ActorCommand []string
+
+func (a *ActorCommand) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		var raw string
+		if err := value.Decode(&raw); err != nil {
+			return err
+		}
+		*a = strings.Fields(raw)
+		return nil
+	case yaml.SequenceNode:
+		var list []string
+		if err := value.Decode(&list); err != nil {
+			return err
+		}
+		*a = list
+		return nil
+	}
+	return fmt.Errorf("actor command must be a string or a list")
+}
+
 // RoleActors maps actor name to command argv.
-// Example:
-//
-//	actors:
-//	  probe_active:
-//	    - ./test/testdata/scripts/probe_active.sh
-//	    - pg
-type RoleActors map[string][]string
+type RoleActors map[string]ActorCommand
 
 type RoleTimeouts struct {
 	Exec           Duration `yaml:"exec"`
@@ -102,6 +124,166 @@ type RoleTimeouts struct {
 	RetryInterval  Duration `yaml:"retry_interval"`
 	CheckInterval  Duration `yaml:"check_interval"`
 	DetailsMaxSize int      `yaml:"details_max_size"`
+}
+
+// EtcdSnapshot holds config documents loaded from etcd for use in Merge.
+type EtcdSnapshot struct {
+	Cluster          *model.ClusterConfigDocument
+	ClusterGroups    map[string]*model.ClusterGroupConfigDocument
+	Roles            map[string]*model.RoleConfigDocument
+	ManagementGroups map[string]map[string]*model.ManagementGroupConfigDocument
+	Node             *model.NodeConfigDocument
+}
+
+// Merge returns a new *Config with etcd values overriding local where non-empty.
+// Node-local fields (etcd endpoints, api listen, logger, node_id, actors_base_dir)
+// are always taken from local.
+func Merge(local *Config, snap *EtcdSnapshot) *Config {
+	if snap == nil {
+		return local
+	}
+
+	merged := *local
+
+	// Deep copy Cluster (groups map)
+	merged.Cluster.Groups = make(map[string]ClusterGroupConfig, len(local.Cluster.Groups))
+	for k, v := range local.Cluster.Groups {
+		merged.Cluster.Groups[k] = v
+	}
+
+	// Deep copy Roles
+	merged.Roles = make(map[string]RoleConfig, len(local.Roles))
+	for k, v := range local.Roles {
+		actors := make(RoleActors, len(v.Actors))
+		for ak, av := range v.Actors {
+			cmd := make(ActorCommand, len(av))
+			copy(cmd, av)
+			actors[ak] = cmd
+		}
+		v.Actors = actors
+		merged.Roles[k] = v
+	}
+
+	// Deep copy ManagementGroups
+	merged.ManagementGroups = make(map[string]map[string]ManagementGroupConfig, len(local.ManagementGroups))
+	for cg, mgMap := range local.ManagementGroups {
+		merged.ManagementGroups[cg] = make(map[string]ManagementGroupConfig, len(mgMap))
+		for mg, mgCfg := range mgMap {
+			roles := make([]string, len(mgCfg.Roles))
+			copy(roles, mgCfg.Roles)
+			mgCfg.Roles = roles
+			merged.ManagementGroups[cg][mg] = mgCfg
+		}
+	}
+
+	// Deep copy Node.Memberships
+	merged.Node.Memberships = make([]MembershipConfig, len(local.Node.Memberships))
+	copy(merged.Node.Memberships, local.Node.Memberships)
+
+	// Apply cluster config from etcd
+	if c := snap.Cluster; c != nil {
+		if c.Name != "" {
+			merged.Cluster.Name = c.Name
+		}
+		if c.FailoverMode != "" {
+			merged.Cluster.FailoverMode = c.FailoverMode
+		}
+		if d, err := time.ParseDuration(c.LeaderTTL); err == nil && d > 0 {
+			merged.Cluster.LeaderTTL = Duration{Duration: d}
+		}
+		if d, err := time.ParseDuration(c.LeaderRenewInterval); err == nil && d > 0 {
+			merged.Cluster.LeaderRenewInterval = Duration{Duration: d}
+		}
+		if d, err := time.ParseDuration(c.SessionTTL); err == nil && d > 0 {
+			merged.Cluster.SessionTTL = Duration{Duration: d}
+		}
+	}
+
+	// Apply cluster groups from etcd
+	for id, groupDoc := range snap.ClusterGroups {
+		if groupDoc.Name == "" {
+			continue
+		}
+		g := merged.Cluster.Groups[id]
+		g.Name = groupDoc.Name
+		merged.Cluster.Groups[id] = g
+	}
+
+	// Apply roles from etcd
+	for id, roleDoc := range snap.Roles {
+		role := merged.Roles[id]
+		if roleDoc.Name != "" {
+			role.Name = roleDoc.Name
+		}
+		if len(roleDoc.Actors) > 0 {
+			role.Actors = make(RoleActors, len(roleDoc.Actors))
+			for k, v := range roleDoc.Actors {
+				role.Actors[k] = ActorCommand(v)
+			}
+		}
+		t := roleDoc.Timeouts
+		if d, err := time.ParseDuration(t.Exec); err == nil && d > 0 {
+			role.Timeouts.Exec = Duration{Duration: d}
+		}
+		if d, err := time.ParseDuration(t.Converge); err == nil && d > 0 {
+			role.Timeouts.Converge = Duration{Duration: d}
+		}
+		if d, err := time.ParseDuration(t.RetryInterval); err == nil && d > 0 {
+			role.Timeouts.RetryInterval = Duration{Duration: d}
+		}
+		if d, err := time.ParseDuration(t.CheckInterval); err == nil && d > 0 {
+			role.Timeouts.CheckInterval = Duration{Duration: d}
+		}
+		if t.DetailsMaxSize > 0 {
+			role.Timeouts.DetailsMaxSize = t.DetailsMaxSize
+		}
+		merged.Roles[id] = role
+	}
+
+	// Apply management groups from etcd
+	for cg, mgMap := range snap.ManagementGroups {
+		if merged.ManagementGroups[cg] == nil {
+			merged.ManagementGroups[cg] = make(map[string]ManagementGroupConfig)
+		}
+		for mg, mgDoc := range mgMap {
+			mgCfg := merged.ManagementGroups[cg][mg]
+			if mgDoc.Priority > 0 {
+				mgCfg.Priority = mgDoc.Priority
+			}
+			if len(mgDoc.Roles) > 0 {
+				mgCfg.Roles = mgDoc.Roles
+			}
+			merged.ManagementGroups[cg][mg] = mgCfg
+		}
+	}
+
+	// Apply this node's config from etcd
+	if n := snap.Node; n != nil {
+		if n.Name != "" {
+			merged.Node.Name = n.Name
+		}
+		if len(n.Memberships) > 0 {
+			merged.Node.Memberships = make([]MembershipConfig, len(n.Memberships))
+			for i, m := range n.Memberships {
+				merged.Node.Memberships[i] = MembershipConfig{
+					ClusterGroup:    m.ClusterGroup,
+					ManagementGroup: m.ManagementGroup,
+				}
+			}
+		}
+	}
+
+	return &merged
+}
+
+// ResolveActorPath resolves an actor executable path against Node.ActorsBaseDir.
+// Absolute paths are returned unchanged. Relative paths are joined with the base.
+// If ActorsBaseDir is empty, path is returned unchanged (relative to CWD).
+func (cfg *Config) ResolveActorPath(execPath string) string {
+	if cfg.Node.ActorsBaseDir == "" || filepath.IsAbs(execPath) {
+		return execPath
+	}
+	return filepath.Join(cfg.Node.ActorsBaseDir, execPath)
 }
 
 func Load(path string) (*Config, error) {
@@ -125,24 +307,24 @@ func Load(path string) (*Config, error) {
 }
 
 func applyDefaults(cfg *Config) {
-	if cfg.Local.Logger.Level == "" {
-		cfg.Local.Logger.Level = "debug"
+	if cfg.Logger.Level == "" {
+		cfg.Logger.Level = "debug"
 	}
 
-	if cfg.Local.Logger.Format == "" {
-		cfg.Local.Logger.Format = "plain"
+	if cfg.Logger.Format == "" {
+		cfg.Logger.Format = "plain"
 	}
 
-	if cfg.Local.API.Listen == "" {
-		cfg.Local.API.Listen = ":5080"
+	if cfg.API.Listen == "" {
+		cfg.API.Listen = ":5080"
 	}
 
-	if cfg.Local.Etcd.DialTimeout.Duration == 0 {
-		cfg.Local.Etcd.DialTimeout.Duration = 3 * time.Second
+	if cfg.Etcd.DialTimeout.Duration == 0 {
+		cfg.Etcd.DialTimeout.Duration = 3 * time.Second
 	}
 
-	if cfg.Local.Etcd.RetryInterval.Duration == 0 {
-		cfg.Local.Etcd.RetryInterval.Duration = time.Second
+	if cfg.Etcd.RetryInterval.Duration == 0 {
+		cfg.Etcd.RetryInterval.Duration = time.Second
 	}
 
 	if cfg.Cluster.Name == "" {
@@ -156,8 +338,8 @@ func applyDefaults(cfg *Config) {
 		cfg.Cluster.Groups[groupID] = group
 	}
 
-	if cfg.Agent.Name == "" {
-		cfg.Agent.Name = cfg.Agent.NodeID
+	if cfg.Node.Name == "" {
+		cfg.Node.Name = cfg.Node.NodeID
 	}
 
 	if cfg.Cluster.FailoverMode == "" {
@@ -214,16 +396,16 @@ func validate(cfg *Config) error {
 		return errors.New("cluster.groups must contain at least one group")
 	}
 
-	if len(cfg.Local.Etcd.Endpoints) == 0 {
-		return errors.New("local.etcd.endpoints must contain at least one endpoint")
+	if len(cfg.Etcd.Endpoints) == 0 {
+		return errors.New("etcd.endpoints must contain at least one endpoint")
 	}
 
-	if cfg.Agent.NodeID == "" {
-		return errors.New("agent.node_id is required")
+	if cfg.Node.NodeID == "" {
+		return errors.New("node.node_id is required")
 	}
 
-	if len(cfg.Agent.Memberships) == 0 {
-		return errors.New("agent.memberships must contain at least one membership")
+	if len(cfg.Node.Memberships) == 0 {
+		return errors.New("node.memberships must contain at least one membership")
 	}
 
 	groupSet := make(map[string]struct{}, len(cfg.Cluster.Groups))
@@ -234,7 +416,7 @@ func validate(cfg *Config) error {
 		groupSet[groupID] = struct{}{}
 	}
 
-	for _, membership := range cfg.Agent.Memberships {
+	for _, membership := range cfg.Node.Memberships {
 		if _, ok := groupSet[membership.ClusterGroup]; !ok {
 			return fmt.Errorf(
 				"membership cluster_group %q is not declared in cluster.groups",
@@ -246,25 +428,46 @@ func validate(cfg *Config) error {
 			return errors.New("membership.management_group is required")
 		}
 
-		if membership.Priority <= 0 {
+		mgGroups, ok := cfg.ManagementGroups[membership.ClusterGroup]
+		if !ok {
 			return fmt.Errorf(
-				"membership %s/%s priority must be greater than zero",
+				"membership cluster_group %q has no entry in management_groups",
+				membership.ClusterGroup,
+			)
+		}
+
+		mgCfg, ok := mgGroups[membership.ManagementGroup]
+		if !ok {
+			return fmt.Errorf(
+				"membership management_group %q/%q is not declared in management_groups",
 				membership.ClusterGroup,
 				membership.ManagementGroup,
 			)
 		}
 
-		if len(membership.Roles) == 0 {
+		if mgCfg.Priority <= 0 {
 			return fmt.Errorf(
-				"membership %s/%s must contain at least one role",
+				"management_groups %s/%s priority must be greater than zero",
 				membership.ClusterGroup,
 				membership.ManagementGroup,
 			)
 		}
 
-		for _, roleName := range membership.Roles {
+		if len(mgCfg.Roles) == 0 {
+			return fmt.Errorf(
+				"management_groups %s/%s must contain at least one role",
+				membership.ClusterGroup,
+				membership.ManagementGroup,
+			)
+		}
+
+		for _, roleName := range mgCfg.Roles {
 			if _, ok := cfg.Roles[roleName]; !ok {
-				return fmt.Errorf("membership references undefined role %q", roleName)
+				return fmt.Errorf("management_group %s/%s references undefined role %q",
+					membership.ClusterGroup,
+					membership.ManagementGroup,
+					roleName,
+				)
 			}
 		}
 	}

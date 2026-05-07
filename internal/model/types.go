@@ -49,6 +49,7 @@ type HealthDocument struct {
 
 type ManagementGroupConfigDocument struct {
 	Priority  int       `json:"priority"`
+	Roles     []string  `json:"roles,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -99,15 +100,50 @@ type Command struct {
 	FinishedAt      *time.Time    `json:"finished_at,omitempty"`
 }
 
-type DynamicConfigNameDocument struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+// ClusterConfigDocument is stored at config/_meta.
+type ClusterConfigDocument struct {
+	ID                  string    `json:"id"`
+	Name                string    `json:"name"`
+	FailoverMode        string    `json:"failover_mode,omitempty"`
+	LeaderTTL           string    `json:"leader_ttl,omitempty"`
+	LeaderRenewInterval string    `json:"leader_renew_interval,omitempty"`
+	SessionTTL          string    `json:"session_ttl,omitempty"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
-type DynamicConfigDocument struct {
-	Cluster       DynamicConfigNameDocument            `json:"cluster"`
-	ClusterGroups map[string]DynamicConfigNameDocument `json:"cluster_groups"`
-	Roles         map[string]DynamicConfigNameDocument `json:"roles"`
-	Nodes         map[string]DynamicConfigNameDocument `json:"nodes"`
-	UpdatedAt     time.Time                            `json:"updated_at"`
+// ClusterGroupConfigDocument is stored at config/cluster_groups/{group_id}.
+type ClusterGroupConfigDocument struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type RoleTimeoutsDocument struct {
+	Exec           string `json:"exec,omitempty"`
+	Converge       string `json:"converge,omitempty"`
+	RetryInterval  string `json:"retry_interval,omitempty"`
+	CheckInterval  string `json:"check_interval,omitempty"`
+	DetailsMaxSize int    `json:"details_max_size,omitempty"`
+}
+
+// RoleConfigDocument is stored at config/roles/{role_id}.
+type RoleConfigDocument struct {
+	ID        string              `json:"id"`
+	Name      string              `json:"name"`
+	Actors    map[string][]string `json:"actors,omitempty"`
+	Timeouts  RoleTimeoutsDocument `json:"timeouts"`
+	UpdatedAt time.Time           `json:"updated_at"`
+}
+
+type MembershipRef struct {
+	ClusterGroup    string `json:"cluster_group"`
+	ManagementGroup string `json:"management_group"`
+}
+
+// NodeConfigDocument is stored at config/nodes/{node_id}.
+type NodeConfigDocument struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Memberships []MembershipRef `json:"memberships,omitempty"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }

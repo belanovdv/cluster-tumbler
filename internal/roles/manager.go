@@ -37,8 +37,9 @@ func New(
 		log:   log,
 	}
 
-	for _, membership := range cfg.Agent.Memberships {
-		for _, role := range membership.Roles {
+	for _, membership := range cfg.Node.Memberships {
+		mgCfg := cfg.ManagementGroups[membership.ClusterGroup][membership.ManagementGroup]
+		for _, role := range mgCfg.Roles {
 			m.workers = append(m.workers, NewWorker(
 				cfg,
 				membership,
@@ -265,7 +266,7 @@ func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
 			Timeout:        roleCfg.Timeouts.Exec.Duration,
 			DetailsMaxSize: roleCfg.Timeouts.DetailsMaxSize,
 		},
-		Actors:        toExecutorActors(roleCfg.Actors),
+		Actors:        toExecutorActors(roleCfg.Actors, w.cfg),
 		Converge:      roleCfg.Timeouts.Converge.Duration,
 		RetryInterval: roleCfg.Timeouts.RetryInterval.Duration,
 	}
@@ -290,7 +291,7 @@ func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
 	status := executor.Reconcile(ctx, RoleRequest{
 		ClusterGroup:    w.membership.ClusterGroup,
 		ManagementGroup: w.membership.ManagementGroup,
-		NodeID:          w.cfg.Agent.NodeID,
+		NodeID:          w.cfg.Node.NodeID,
 		Role:            w.role,
 		Desired:         string(desired),
 	}, onTransition)
@@ -354,7 +355,7 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		w.cfg.Cluster.ID,
 		w.membership.ClusterGroup,
 		w.membership.ManagementGroup,
-		w.cfg.Agent.NodeID,
+		w.cfg.Node.NodeID,
 		w.role,
 	)
 
@@ -362,7 +363,7 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		w.cfg.Cluster.ID,
 		w.membership.ClusterGroup,
 		w.membership.ManagementGroup,
-		w.cfg.Agent.NodeID,
+		w.cfg.Node.NodeID,
 		w.role,
 	)
 
@@ -444,11 +445,15 @@ func (w *Worker) hasHealthChanged(key string, status model.HealthStatus) bool {
 	return current.Status != status
 }
 
-func toExecutorActors(src config.RoleActors) map[ActorName][]string {
+func toExecutorActors(src config.RoleActors, cfg *config.Config) map[ActorName][]string {
 	out := make(map[ActorName][]string, len(src))
 
 	for name, command := range src {
-		out[ActorName(name)] = command
+		cmd := []string(command)
+		if len(cmd) > 0 {
+			cmd[0] = cfg.ResolveActorPath(cmd[0])
+		}
+		out[ActorName(name)] = cmd
 	}
 
 	return out
