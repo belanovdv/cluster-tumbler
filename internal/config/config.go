@@ -31,16 +31,13 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type Config struct {
-	Local   LocalConfig           `yaml:"local"`
-	Cluster ClusterConfig         `yaml:"cluster"`
-	Agent   AgentConfig           `yaml:"agent"`
-	Roles   map[string]RoleConfig `yaml:"roles"`
-}
-
-type LocalConfig struct {
-	Etcd   EtcdConfig     `yaml:"etcd"`
-	Logger logging.Config `yaml:"logger"`
-	API    APIConfig      `yaml:"api"`
+	Etcd             EtcdConfig                                   `yaml:"etcd"`
+	Logger           logging.Config                               `yaml:"logger"`
+	API              APIConfig                                    `yaml:"api"`
+	Cluster          ClusterConfig                                `yaml:"cluster"`
+	Node             NodeConfig                                   `yaml:"node"`
+	ManagementGroups map[string]map[string]ManagementGroupConfig  `yaml:"management_groups"`
+	Roles            map[string]RoleConfig                        `yaml:"roles"`
 }
 
 type EtcdConfig struct {
@@ -68,17 +65,20 @@ type ClusterGroupConfig struct {
 	Name string `yaml:"name"`
 }
 
-type AgentConfig struct {
+type NodeConfig struct {
 	NodeID      string             `yaml:"node_id"`
 	Name        string             `yaml:"name"`
 	Memberships []MembershipConfig `yaml:"memberships"`
 }
 
 type MembershipConfig struct {
-	ClusterGroup    string   `yaml:"cluster_group"`
-	ManagementGroup string   `yaml:"management_group"`
-	Priority        int      `yaml:"priority"`
-	Roles           []string `yaml:"roles"`
+	ClusterGroup    string `yaml:"cluster_group"`
+	ManagementGroup string `yaml:"management_group"`
+}
+
+type ManagementGroupConfig struct {
+	Priority int      `yaml:"priority"`
+	Roles    []string `yaml:"roles"`
 }
 
 type RoleConfig struct {
@@ -92,8 +92,8 @@ type RoleConfig struct {
 //
 //	actors:
 //	  probe_active:
-//	    - ./test/testdata/scripts/probe_active.sh
-//	    - pg
+//	    - ./actors/core/probe_active.sh
+//	    - arg
 type RoleActors map[string][]string
 
 type RoleTimeouts struct {
@@ -125,24 +125,24 @@ func Load(path string) (*Config, error) {
 }
 
 func applyDefaults(cfg *Config) {
-	if cfg.Local.Logger.Level == "" {
-		cfg.Local.Logger.Level = "debug"
+	if cfg.Logger.Level == "" {
+		cfg.Logger.Level = "debug"
 	}
 
-	if cfg.Local.Logger.Format == "" {
-		cfg.Local.Logger.Format = "plain"
+	if cfg.Logger.Format == "" {
+		cfg.Logger.Format = "plain"
 	}
 
-	if cfg.Local.API.Listen == "" {
-		cfg.Local.API.Listen = ":5080"
+	if cfg.API.Listen == "" {
+		cfg.API.Listen = ":5080"
 	}
 
-	if cfg.Local.Etcd.DialTimeout.Duration == 0 {
-		cfg.Local.Etcd.DialTimeout.Duration = 3 * time.Second
+	if cfg.Etcd.DialTimeout.Duration == 0 {
+		cfg.Etcd.DialTimeout.Duration = 3 * time.Second
 	}
 
-	if cfg.Local.Etcd.RetryInterval.Duration == 0 {
-		cfg.Local.Etcd.RetryInterval.Duration = time.Second
+	if cfg.Etcd.RetryInterval.Duration == 0 {
+		cfg.Etcd.RetryInterval.Duration = time.Second
 	}
 
 	if cfg.Cluster.Name == "" {
@@ -156,8 +156,8 @@ func applyDefaults(cfg *Config) {
 		cfg.Cluster.Groups[groupID] = group
 	}
 
-	if cfg.Agent.Name == "" {
-		cfg.Agent.Name = cfg.Agent.NodeID
+	if cfg.Node.Name == "" {
+		cfg.Node.Name = cfg.Node.NodeID
 	}
 
 	if cfg.Cluster.FailoverMode == "" {
@@ -214,16 +214,16 @@ func validate(cfg *Config) error {
 		return errors.New("cluster.groups must contain at least one group")
 	}
 
-	if len(cfg.Local.Etcd.Endpoints) == 0 {
-		return errors.New("local.etcd.endpoints must contain at least one endpoint")
+	if len(cfg.Etcd.Endpoints) == 0 {
+		return errors.New("etcd.endpoints must contain at least one endpoint")
 	}
 
-	if cfg.Agent.NodeID == "" {
-		return errors.New("agent.node_id is required")
+	if cfg.Node.NodeID == "" {
+		return errors.New("node.node_id is required")
 	}
 
-	if len(cfg.Agent.Memberships) == 0 {
-		return errors.New("agent.memberships must contain at least one membership")
+	if len(cfg.Node.Memberships) == 0 {
+		return errors.New("node.memberships must contain at least one membership")
 	}
 
 	groupSet := make(map[string]struct{}, len(cfg.Cluster.Groups))
@@ -234,7 +234,7 @@ func validate(cfg *Config) error {
 		groupSet[groupID] = struct{}{}
 	}
 
-	for _, membership := range cfg.Agent.Memberships {
+	for _, membership := range cfg.Node.Memberships {
 		if _, ok := groupSet[membership.ClusterGroup]; !ok {
 			return fmt.Errorf(
 				"membership cluster_group %q is not declared in cluster.groups",
@@ -246,25 +246,46 @@ func validate(cfg *Config) error {
 			return errors.New("membership.management_group is required")
 		}
 
-		if membership.Priority <= 0 {
+		mgGroups, ok := cfg.ManagementGroups[membership.ClusterGroup]
+		if !ok {
 			return fmt.Errorf(
-				"membership %s/%s priority must be greater than zero",
+				"membership cluster_group %q has no entry in management_groups",
+				membership.ClusterGroup,
+			)
+		}
+
+		mgCfg, ok := mgGroups[membership.ManagementGroup]
+		if !ok {
+			return fmt.Errorf(
+				"membership management_group %q/%q is not declared in management_groups",
 				membership.ClusterGroup,
 				membership.ManagementGroup,
 			)
 		}
 
-		if len(membership.Roles) == 0 {
+		if mgCfg.Priority <= 0 {
 			return fmt.Errorf(
-				"membership %s/%s must contain at least one role",
+				"management_groups %s/%s priority must be greater than zero",
 				membership.ClusterGroup,
 				membership.ManagementGroup,
 			)
 		}
 
-		for _, roleName := range membership.Roles {
+		if len(mgCfg.Roles) == 0 {
+			return fmt.Errorf(
+				"management_groups %s/%s must contain at least one role",
+				membership.ClusterGroup,
+				membership.ManagementGroup,
+			)
+		}
+
+		for _, roleName := range mgCfg.Roles {
 			if _, ok := cfg.Roles[roleName]; !ok {
-				return fmt.Errorf("membership references undefined role %q", roleName)
+				return fmt.Errorf("management_group %s/%s references undefined role %q",
+					membership.ClusterGroup,
+					membership.ManagementGroup,
+					roleName,
+				)
 			}
 		}
 	}

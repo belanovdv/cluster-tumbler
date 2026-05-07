@@ -65,7 +65,7 @@ func (m *Manager) tryLeadership(ctx context.Context) error {
 	}
 
 	doc := model.LeadershipDocument{
-		OwnerNodeID: m.cfg.Agent.NodeID,
+		OwnerNodeID: m.cfg.Node.NodeID,
 		LeaseID:     int64(leaseID),
 		UpdatedAt:   time.Now().UTC(),
 	}

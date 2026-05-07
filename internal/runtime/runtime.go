@@ -35,21 +35,21 @@ type Runtime struct {
 }
 
 func New(cfg *config.Config) (*Runtime, error) {
-	baseLogger, err := logging.New(cfg.Local.Logger)
+	baseLogger, err := logging.New(cfg.Logger)
 	if err != nil {
 		return nil, err
 	}
 
 	baseLogger = baseLogger.With(
 		zap.String("cluster", cfg.Cluster.ID),
-		zap.String("node", cfg.Agent.NodeID),
+		zap.String("node", cfg.Node.NodeID),
 	)
 
 	log := logging.WithComponent(baseLogger, "runtime")
 
 	etcdClient, err := etcd.New(
-		cfg.Local.Etcd.Endpoints,
-		cfg.Local.Etcd.DialTimeout.Duration,
+		cfg.Etcd.Endpoints,
+		cfg.Etcd.DialTimeout.Duration,
 		logging.WithComponent(baseLogger, "etcd"),
 	)
 	if err != nil {
@@ -64,9 +64,9 @@ func New(cfg *config.Config) (*Runtime, error) {
 		store:      st,
 		etcdClient: etcdClient,
 		api: api.New(
-			cfg.Local.API.Listen,
+			cfg.API.Listen,
 			cfg.Cluster.ID,
-			cfg.Local.API.Token,
+			cfg.API.Token,
 			st,
 			apiPutter{client: etcdClient},
 			logging.WithComponent(baseLogger, "api"),
@@ -168,7 +168,7 @@ func (r *Runtime) connectETCD(ctx context.Context) error {
 
 		r.log.Debug("checking etcd connectivity")
 
-		checkCtx, cancel := context.WithTimeout(ctx, r.cfg.Local.Etcd.DialTimeout.Duration)
+		checkCtx, cancel := context.WithTimeout(ctx, r.cfg.Etcd.DialTimeout.Duration)
 		_, _, err := r.etcdClient.GetPrefix(checkCtx, keys.Root(r.cfg.Cluster.ID))
 		cancel()
 
@@ -182,7 +182,7 @@ func (r *Runtime) connectETCD(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(r.cfg.Local.Etcd.RetryInterval.Duration):
+		case <-time.After(r.cfg.Etcd.RetryInterval.Duration):
 		}
 	}
 }

@@ -37,8 +37,9 @@ func New(
 		log:   log,
 	}
 
-	for _, membership := range cfg.Agent.Memberships {
-		for _, role := range membership.Roles {
+	for _, membership := range cfg.Node.Memberships {
+		mgCfg := cfg.ManagementGroups[membership.ClusterGroup][membership.ManagementGroup]
+		for _, role := range mgCfg.Roles {
 			m.workers = append(m.workers, NewWorker(
 				cfg,
 				membership,
@@ -290,7 +291,7 @@ func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
 	status := executor.Reconcile(ctx, RoleRequest{
 		ClusterGroup:    w.membership.ClusterGroup,
 		ManagementGroup: w.membership.ManagementGroup,
-		NodeID:          w.cfg.Agent.NodeID,
+		NodeID:          w.cfg.Node.NodeID,
 		Role:            w.role,
 		Desired:         string(desired),
 	}, onTransition)
@@ -354,7 +355,7 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		w.cfg.Cluster.ID,
 		w.membership.ClusterGroup,
 		w.membership.ManagementGroup,
-		w.cfg.Agent.NodeID,
+		w.cfg.Node.NodeID,
 		w.role,
 	)
 
@@ -362,7 +363,7 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		w.cfg.Cluster.ID,
 		w.membership.ClusterGroup,
 		w.membership.ManagementGroup,
-		w.cfg.Agent.NodeID,
+		w.cfg.Node.NodeID,
 		w.role,
 	)
 

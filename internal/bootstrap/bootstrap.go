@@ -34,7 +34,7 @@ func (b *Bootstrapper) Ensure(ctx context.Context) error {
 		return err
 	}
 
-	for _, membership := range b.cfg.Agent.Memberships {
+	for _, membership := range b.cfg.Node.Memberships {
 		if err := b.ensureMembership(ctx, membership); err != nil {
 			return err
 		}
@@ -132,12 +132,12 @@ func (b *Bootstrapper) ensureDynamicConfig(ctx context.Context) error {
 		changed = true
 	}
 
-	nodeID := b.cfg.Agent.NodeID
+	nodeID := b.cfg.Node.NodeID
 	node, ok := doc.Nodes[nodeID]
 	if !ok {
 		doc.Nodes[nodeID] = model.DynamicConfigNameDocument{
 			ID:   nodeID,
-			Name: b.cfg.Agent.Name,
+			Name: b.cfg.Node.Name,
 		}
 		changed = true
 	} else {
@@ -147,7 +147,7 @@ func (b *Bootstrapper) ensureDynamicConfig(ctx context.Context) error {
 		}
 
 		if node.Name == "" {
-			node.Name = b.cfg.Agent.Name
+			node.Name = b.cfg.Node.Name
 			changed = true
 		}
 
@@ -196,8 +196,10 @@ func (b *Bootstrapper) loadDynamicConfig(
 func (b *Bootstrapper) ensureMembership(ctx context.Context, membership config.MembershipConfig) error {
 	now := time.Now().UTC()
 
+	mgCfg := b.cfg.ManagementGroups[membership.ClusterGroup][membership.ManagementGroup]
+
 	configDoc := model.ManagementGroupConfigDocument{
-		Priority:  membership.Priority,
+		Priority:  mgCfg.Priority,
 		UpdatedAt: now,
 	}
 
