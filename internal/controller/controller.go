@@ -26,7 +26,8 @@ type Controller struct {
 	log   *zap.Logger
 
 	lastManagementGroups map[string][]string
-	switchoverStarted    map[string]time.Time // key: "clusterGroup/mgName" → when phase-1 began
+	switchoverStarted    map[string]time.Time  // key: "clusterGroup/mgName" → when phase-1 began
+	switchoverTarget     map[string]string     // key: clusterGroup → target MG that phase-1 was initiated for
 }
 
 type groupRuntime struct {
@@ -52,6 +53,7 @@ func New(cfg *config.Config, st *store.StateStore, etcdClient *etcd.Client, log 
 		log:                  log,
 		lastManagementGroups: make(map[string][]string),
 		switchoverStarted:    make(map[string]time.Time),
+		switchoverTarget:     make(map[string]string),
 	}
 }
 
@@ -532,6 +534,10 @@ func (c *Controller) applyPriorityPolicy(
 			switchKey := clusterGroup + "/" + currentActive
 			if _, ok := c.switchoverStarted[switchKey]; !ok {
 				c.switchoverStarted[switchKey] = time.Now()
+				// Record which target this phase-1 drain is for, so phase-2 can verify
+				// it was reached via a legitimate controller-initiated switchover and not
+				// a stray desired=passive left over from a disable or other admin action.
+				c.switchoverTarget[clusterGroup] = target.ManagementGroup
 			} else {
 				T := c.switchoverTimeout(clusterGroup, currentActive)
 				if time.Since(c.switchoverStarted[switchKey]) > T {
@@ -541,6 +547,7 @@ func (c *Controller) applyPriorityPolicy(
 						zap.Duration("timeout", T),
 					)
 					delete(c.switchoverStarted, switchKey)
+					delete(c.switchoverTarget, clusterGroup)
 				}
 			}
 			return nil
@@ -550,6 +557,15 @@ func (c *Controller) applyPriorityPolicy(
 	}
 
 	// Phase 2: activate target group.
+	// Guard: only proceed if phase-1 was controller-initiated for this target. This prevents
+	// the controller from auto-activating a passive group when the previous active was
+	// intentionally disabled (desired=idle) by an admin — in that case phase-1 never fires
+	// and switchoverTarget is never set.
+	if currentActive == "" && c.switchoverTarget[clusterGroup] != target.ManagementGroup {
+		return nil
+	}
+	delete(c.switchoverTarget, clusterGroup)
+
 	if err := c.writeDesiredIfChanged(ctx, target.ClusterGroup, target.ManagementGroup, model.DesiredActive); err != nil {
 		return err
 	}
