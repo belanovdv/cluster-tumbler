@@ -171,7 +171,7 @@ func (cc *CommandConsumer) execPromote(ctx context.Context, cmd model.Command) e
 		cc.log.Debug("promote: group already has highest priority",
 			zap.String("management_group", cmd.ManagementGroup),
 		)
-		return nil
+		return cc.writeDesiredIfIdle(ctx, cmd.ClusterGroup, cmd.ManagementGroup)
 	}
 
 	// Swap: target gets minPri, current top gets targetPri.
