@@ -460,7 +460,7 @@ func (c *Controller) applyPriorityPolicy(
 	// Active-active topology: all groups share the same priority → activate all non-idle groups.
 	if allSamePriority(groups) {
 		for _, g := range groups {
-			if c.cfg.Cluster.FailoverMode != "automatic" && g.Desired == model.DesiredIdle {
+			if g.Desired == model.DesiredIdle {
 				continue
 			}
 			if err := c.writeDesiredIfChanged(ctx, g.ClusterGroup, g.ManagementGroup, model.DesiredActive); err != nil {
@@ -473,7 +473,7 @@ func (c *Controller) applyPriorityPolicy(
 	// Active-passive topology: find the highest-priority available group.
 	target := c.findTarget(clusterGroup, groups)
 	if target == nil {
-		c.log.Warn("no available management groups for failover policy", zap.String("cluster_group", clusterGroup))
+		c.log.Debug("no available management groups for failover policy", zap.String("cluster_group", clusterGroup))
 		return nil
 	}
 
@@ -492,7 +492,7 @@ func (c *Controller) applyPriorityPolicy(
 			if g.ManagementGroup == target.ManagementGroup {
 				continue
 			}
-			if c.cfg.Cluster.FailoverMode != "automatic" && g.Desired == model.DesiredIdle {
+			if g.Desired == model.DesiredIdle {
 				continue
 			}
 			if err := c.writeDesiredIfChanged(ctx, g.ClusterGroup, g.ManagementGroup, model.DesiredPassive); err != nil {
@@ -539,6 +539,13 @@ func (c *Controller) applyPriorityPolicy(
 	}
 
 	// Phase 2: activate target group.
+	// Cold-start guard: if no group currently holds desired=active and the target was not
+	// explicitly promoted (desired=active), do not auto-activate — this prevents the controller
+	// from turning a passive group active when the previous active was intentionally set to idle.
+	if currentActive == "" && target.Desired != model.DesiredActive {
+		return nil
+	}
+
 	if err := c.writeDesiredIfChanged(ctx, target.ClusterGroup, target.ManagementGroup, model.DesiredActive); err != nil {
 		return err
 	}
@@ -547,7 +554,7 @@ func (c *Controller) applyPriorityPolicy(
 		if g.ManagementGroup == target.ManagementGroup {
 			continue
 		}
-		if c.cfg.Cluster.FailoverMode != "automatic" && g.Desired == model.DesiredIdle {
+		if g.Desired == model.DesiredIdle {
 			continue
 		}
 		if err := c.writeDesiredIfChanged(ctx, g.ClusterGroup, g.ManagementGroup, model.DesiredPassive); err != nil {
@@ -573,12 +580,12 @@ func allSamePriority(groups []groupRuntime) bool {
 }
 
 // findTarget returns the highest-priority (lowest Priority value) available group.
-// In manual mode, groups with desired=idle are excluded from candidacy.
+// Groups with desired=idle are always excluded from candidacy.
 func (c *Controller) findTarget(clusterGroup string, groups []groupRuntime) *groupRuntime {
 	var result *groupRuntime
 	for i := range groups {
 		g := &groups[i]
-		if c.cfg.Cluster.FailoverMode != "automatic" && g.Desired == model.DesiredIdle {
+		if g.Desired == model.DesiredIdle {
 			continue
 		}
 		if !g.Available {
@@ -681,10 +688,11 @@ func (c *Controller) handleAutoFailover(ctx context.Context, clusterGroup string
 		return false
 	}
 
-	// Check if any top-priority group is unavailable (failed).
+	// Check if any top-priority group is unavailable (failed) due to an unintended failure.
+	// Groups with desired=idle are excluded — intentional admin actions do not trigger auto-failover.
 	topFailed := false
 	for _, g := range groups {
-		if g.Priority == minPri && !g.Available {
+		if g.Priority == minPri && !g.Available && g.Desired != model.DesiredIdle {
 			topFailed = true
 			break
 		}

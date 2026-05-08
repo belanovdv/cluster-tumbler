@@ -93,6 +93,7 @@ type Worker struct {
 	log        *zap.Logger
 
 	lastDesired model.DesiredState
+	lastActual  model.ActualState
 	lastCheckAt time.Time
 
 	mu            sync.Mutex
@@ -270,20 +271,7 @@ func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
 		RetryInterval: roleCfg.Timeouts.RetryInterval.Duration,
 	}
 
-	w.log.Debug(
-		"executing role desired via actors",
-		zap.String("desired", string(desired)),
-		zap.Duration("exec_timeout", roleCfg.Timeouts.Exec.Duration),
-		zap.Duration("converge", roleCfg.Timeouts.Converge.Duration),
-		zap.Duration("retry_interval", roleCfg.Timeouts.RetryInterval.Duration),
-		zap.Int("actors", len(roleCfg.Actors)),
-	)
-
 	onTransition := func(status RoleStatus) {
-		w.log.Debug("role state transitioning",
-			zap.String("state", status.State),
-			zap.String("health", status.Health),
-		)
 		w.writeStatus(ctx, status)
 	}
 
@@ -295,13 +283,16 @@ func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
 		Desired:         string(desired),
 	}, onTransition)
 
-	w.log.Debug(
-		"role execution finished",
-		zap.String("desired", string(desired)),
-		zap.String("actual", status.State),
-		zap.String("health", status.Health),
-		zap.Any("details", status.Details),
-	)
+	if model.ActualState(status.State) != w.lastActual {
+		w.log.Debug(
+			"role actual state changed",
+			zap.String("desired", string(desired)),
+			zap.String("actual", status.State),
+			zap.String("health", status.Health),
+			zap.Any("details", status.Details),
+		)
+		w.lastActual = model.ActualState(status.State)
+	}
 
 	w.writeStatus(ctx, status)
 }
