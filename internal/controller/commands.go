@@ -102,6 +102,8 @@ func (cc *CommandConsumer) processCommand(ctx context.Context, cmd model.Command
 		execErr = cc.execDisable(ctx, cmd)
 	case model.CommandTypeReload:
 		execErr = cc.execReload(ctx, cmd)
+	case model.CommandTypeIdleDrain:
+		execErr = cc.execIdleDrain(ctx, cmd)
 	default:
 		execErr = fmt.Errorf("unknown command type: %s", cmd.Type)
 	}
@@ -200,6 +202,24 @@ func (cc *CommandConsumer) execDisable(ctx context.Context, cmd model.Command) e
 
 // execReload clears the failed state by writing desired=passive, triggering a fresh passive convergence attempt.
 func (cc *CommandConsumer) execReload(ctx context.Context, cmd model.Command) error {
+	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive)
+}
+
+// execIdleDrain force-stops services on a group that is in desired=idle by writing desired=passive.
+// Role workers run set_passive/force_stop actors and bring the group to actual=passive.
+// The controller does not auto-activate any other group because switchoverTarget is not set.
+func (cc *CommandConsumer) execIdleDrain(ctx context.Context, cmd model.Command) error {
+	raw, ok := cc.store.Get(model.Desired(cc.clusterID, cmd.ClusterGroup, cmd.ManagementGroup))
+	if !ok {
+		return fmt.Errorf("desired state not found for %s/%s", cmd.ClusterGroup, cmd.ManagementGroup)
+	}
+	var doc model.DesiredDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return fmt.Errorf("failed to decode desired state: %w", err)
+	}
+	if doc.State != model.DesiredIdle {
+		return fmt.Errorf("idle_drain requires desired=idle, got desired=%s", doc.State)
+	}
 	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive)
 }
 

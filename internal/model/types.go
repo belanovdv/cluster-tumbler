@@ -82,9 +82,10 @@ type LeadershipDocument struct {
 type CommandType string
 
 const (
-	CommandTypePromote CommandType = "promote" // swap priorities so target becomes highest-priority
-	CommandTypeDisable CommandType = "disable" // set desired=idle (maintenance mode)
-	CommandTypeReload  CommandType = "reload"  // clear failed state, attempt passive convergence
+	CommandTypePromote   CommandType = "promote"    // swap priorities so target becomes highest-priority
+	CommandTypeDisable   CommandType = "disable"    // set desired=idle (maintenance mode)
+	CommandTypeReload    CommandType = "reload"     // clear failed state, attempt passive convergence
+	CommandTypeIdleDrain CommandType = "idle_drain" // force-stop services on a group that is in desired=idle
 )
 
 // CommandStatus tracks the lifecycle stages of a queued command.

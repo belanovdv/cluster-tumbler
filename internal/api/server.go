@@ -150,7 +150,7 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-// handleCommands accepts management commands (promote, disable, reload) and enqueues them for the leader consumer.
+// handleCommands accepts management commands (promote, disable, reload, idle_drain) and enqueues them for the leader consumer.
 func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -170,10 +170,10 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 
 	cmdType := model.CommandType(req.Type)
 	switch cmdType {
-	case model.CommandTypePromote, model.CommandTypeDisable, model.CommandTypeReload:
+	case model.CommandTypePromote, model.CommandTypeDisable, model.CommandTypeReload, model.CommandTypeIdleDrain:
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": fmt.Sprintf("unknown command type %q; valid types: promote, disable, reload", req.Type),
+			"error": fmt.Sprintf("unknown command type %q; valid types: promote, disable, reload, idle_drain", req.Type),
 		})
 		return
 	}
@@ -185,6 +185,13 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 
 	if cmdType == model.CommandTypePromote {
 		if code, msg := s.validatePromote(req.ClusterGroup, req.ManagementGroup); code != 0 {
+			writeJSON(w, code, map[string]string{"error": msg})
+			return
+		}
+	}
+
+	if cmdType == model.CommandTypeIdleDrain {
+		if code, msg := s.validateIdleDrain(req.ClusterGroup, req.ManagementGroup); code != 0 {
 			writeJSON(w, code, map[string]string{"error": msg})
 			return
 		}
@@ -310,6 +317,23 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 		}
 	}
 
+	return 0, ""
+}
+
+// validateIdleDrain checks that the target management group has desired=idle.
+// Returns (0, "") if valid; (httpStatusCode, errorMessage) if blocked.
+func (s *Server) validateIdleDrain(clusterGroup, managementGroup string) (int, string) {
+	raw, ok := s.store.Get(model.Desired(s.clusterID, clusterGroup, managementGroup))
+	if !ok {
+		return http.StatusBadRequest, fmt.Sprintf("management group %q not found in cluster group %q", managementGroup, clusterGroup)
+	}
+	var doc model.DesiredDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return http.StatusInternalServerError, "failed to read desired state"
+	}
+	if doc.State != model.DesiredIdle {
+		return http.StatusConflict, fmt.Sprintf("idle_drain requires desired=idle, got desired=%s", doc.State)
+	}
 	return 0, ""
 }
 
