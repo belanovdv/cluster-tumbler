@@ -182,6 +182,12 @@ func (cc *CommandConsumer) execPromote(ctx context.Context, cmd model.Command) e
 		return fmt.Errorf("writing priority for %s: %w", minGroup, err)
 	}
 
+	// Bring the target out of idle so the controller can pick it up as a candidate.
+	// The controller applies two-phase activation on the next reconcile.
+	if err := cc.writeDesiredIfIdle(ctx, cmd.ClusterGroup, cmd.ManagementGroup); err != nil {
+		return fmt.Errorf("clearing idle on %s: %w", cmd.ManagementGroup, err)
+	}
+
 	cc.log.Info("promote: priorities swapped",
 		zap.String("promoted", cmd.ManagementGroup), zap.Int("new_priority", minPri),
 		zap.String("demoted", minGroup), zap.Int("new_priority", targetPri),
@@ -197,6 +203,19 @@ func (cc *CommandConsumer) execDisable(ctx context.Context, cmd model.Command) e
 // execReload clears the failed state by writing desired=passive, triggering a fresh passive convergence attempt.
 func (cc *CommandConsumer) execReload(ctx context.Context, cmd model.Command) error {
 	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive)
+}
+
+// writeDesiredIfIdle writes desired=passive only when the current desired state is idle.
+// Used by promote to take the target group out of maintenance mode.
+func (cc *CommandConsumer) writeDesiredIfIdle(ctx context.Context, clusterGroup, managementGroup string) error {
+	raw, ok := cc.store.Get(model.Desired(cc.clusterID, clusterGroup, managementGroup))
+	if ok {
+		var doc model.DesiredDocument
+		if err := json.Unmarshal(raw, &doc); err == nil && doc.State != model.DesiredIdle {
+			return nil
+		}
+	}
+	return cc.writeDesired(ctx, clusterGroup, managementGroup, model.DesiredPassive)
 }
 
 func (cc *CommandConsumer) writeDesired(ctx context.Context, clusterGroup, managementGroup string, state model.DesiredState) error {
