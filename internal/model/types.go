@@ -78,9 +78,16 @@ type LeadershipDocument struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// CommandStatus tracks processing stages for a queued command.
-// Producer (API) writes Pending; consumer (leader controller) advances the lifecycle.
-// The consumer is not yet implemented.
+// CommandType identifies the kind of management command issued via POST /api/v1/commands.
+type CommandType string
+
+const (
+	CommandTypePromote CommandType = "promote" // swap priorities so target becomes highest-priority
+	CommandTypeDisable CommandType = "disable" // set desired=idle (maintenance mode)
+	CommandTypeReload  CommandType = "reload"  // clear failed state, attempt passive convergence
+)
+
+// CommandStatus tracks the lifecycle stages of a queued command.
 type CommandStatus string
 
 const (
@@ -90,17 +97,13 @@ const (
 	CommandFailed    CommandStatus = "failed"
 )
 
-// Command is the document written to commands/{id} by any node via POST /api/v1/commands.
-// The leader is expected to read this queue, apply the requested desired-state change, and
-// archive the document to commands_history/{id}. Queue processing is not yet implemented.
+// Command is written to commands/{id} by POST /api/v1/commands and processed by the leader consumer.
 type Command struct {
 	ID              string        `json:"id"`
-	Type            string        `json:"type"`
+	Type            CommandType   `json:"type"`
 	ClusterGroup    string        `json:"cluster_group"`
 	ManagementGroup string        `json:"management_group"`
-	Desired         DesiredState  `json:"desired"`
 	Status          CommandStatus `json:"status"`
-	Owner           string        `json:"owner,omitempty"`
 	Error           string        `json:"error,omitempty"`
 	CreatedAt       time.Time     `json:"created_at"`
 	StartedAt       *time.Time    `json:"started_at,omitempty"`

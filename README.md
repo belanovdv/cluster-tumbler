@@ -245,22 +245,44 @@ go run ./cmd/main.go --config config.yaml \
 |---|---|---|
 | `GET` | `/api/v1/state` | Full cluster state as pretty-printed JSON |
 | `GET` | `/api/v1/stream` | Server-Sent Events stream; pushes updated state on every etcd change |
-| `POST` | `/api/v1/commands` | Write a command document to etcd (producer only; consumer not yet implemented) |
+| `POST` | `/api/v1/commands` | Enqueue a management command; processed by the leader consumer |
 
 All `/api/v1/*` endpoints accept an optional `Authorization: Bearer <token>` header when `api.token` is configured.
 
 ### POST /api/v1/commands
 
-> **Partial implementation.** Writing a command document is supported. The leader-side processor that reads the queue, applies the desired state change, and archives the result is not yet implemented.
+Three command types are supported:
 
-```json
-{
-  "type": "set_desired",
-  "cluster_group": "geo_dc",
-  "management_group": "DC1",
-  "desired": "active"
-}
+| Type | Action |
+|---|---|
+| `promote` | Swap priorities so the target group becomes highest-priority; controller performs two-phase switchover |
+| `disable` | Set `desired=idle` — take the group out of active management (maintenance mode) |
+| `reload` | Clear `failed` state and attempt passive convergence |
+
+```bash
+# Promote DC2 to highest priority (failover)
+curl -X POST http://node1:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"promote","cluster_group":"geo_dc","management_group":"DC2"}'
+
+# Take DC1 out of rotation (maintenance)
+curl -X POST http://node1:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"disable","cluster_group":"geo_dc","management_group":"DC1"}'
+
+# Reset DC1 after failure investigation
+curl -X POST http://node1:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"reload","cluster_group":"geo_dc","management_group":"DC1"}'
 ```
+
+**Response codes:** `202 Accepted` — command queued; `409 Conflict` — blocked by current state; `400 Bad Request` — invalid parameters.
+
+**`promote` constraints (active-passive topology):**
+- Blocked if any other group has `desired=idle` (actual service state unknown).
+- Not applicable in active-active topology (all groups have equal priority).
+
+**Switchover consistency:** the controller uses a two-phase approach — it waits for the stopping group to reach `actual=passive|failed` before activating the target. Wait timeout is derived from role timeouts: `max(check_interval + converge + exec)` across the group's roles.
 
 ---
 
@@ -294,7 +316,8 @@ Not yet implemented in UI:
 - Registry / session lifecycle
 - Leadership election via etcd TTL lease
 - Controller state aggregation
-- Priority-based automatic failover
+- Priority-based failover with two-phase switchover (stops current active before starting new)
+- Automatic priority swap on failure (`failover_mode: automatic`)
 - Real actor execution (probe→set convergence loop with timeout and retry)
 - `roles.defaults` — base timeouts/actors shared across roles
 - `actors_base_dir` — configurable base directory for actor paths
@@ -302,15 +325,12 @@ Not yet implemented in UI:
 - `--disable-api` / `--disable-controller` CLI flags (unsafe zone support)
 - JSON API (`/api/v1/state`)
 - SSE live-update stream (`/api/v1/stream`)
-- Command producer API (`/api/v1/commands`)
+- Command API (`/api/v1/commands`) — `promote`, `disable`, `reload` with leader-side consumer
 
 ### Partially Implemented
-- Command queue — write side only; leader-side processor not implemented
 - Draft Web UI — live state monitoring only
 - Config watcher — detects etcd config changes but does not propagate to running workers
 
 ### Not Implemented
-- Command queue consumer (leader reads `commands/`, executes, archives to `commands_history/`)
 - Full Web UI (design, authentication, control elements — desired state, config editor, history/diff)
-- Auto failback policy
 - Anti-flapping logic — prevents the controller from rapidly toggling `desired` when a group's health oscillates; requires a stabilisation window before a failover decision is applied

@@ -150,8 +150,7 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-// handleCommands is the producer side of the command queue: writes a Command document to etcd and returns its ID.
-// The consumer (leader queue processor) is not yet implemented.
+// handleCommands accepts management commands (promote, disable, reload) and enqueues them for the leader consumer.
 func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -159,28 +158,43 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Type            string             `json:"type"`
-		ClusterGroup    string             `json:"cluster_group"`
-		ManagementGroup string             `json:"management_group"`
-		Desired         model.DesiredState `json:"desired"`
+		Type            string `json:"type"`
+		ClusterGroup    string `json:"cluster_group"`
+		ManagementGroup string `json:"management_group"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	if req.Type == "" {
-		req.Type = "set_desired"
+	cmdType := model.CommandType(req.Type)
+	switch cmdType {
+	case model.CommandTypePromote, model.CommandTypeDisable, model.CommandTypeReload:
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": fmt.Sprintf("unknown command type %q; valid types: promote, disable, reload", req.Type),
+		})
+		return
+	}
+
+	if req.ClusterGroup == "" || req.ManagementGroup == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cluster_group and management_group are required"})
+		return
+	}
+
+	if cmdType == model.CommandTypePromote {
+		if code, msg := s.validatePromote(req.ClusterGroup, req.ManagementGroup); code != 0 {
+			writeJSON(w, code, map[string]string{"error": msg})
+			return
+		}
 	}
 
 	cmd := model.Command{
 		ID:              time.Now().UTC().Format("20060102T150405.000000000"),
-		Type:            req.Type,
+		Type:            cmdType,
 		ClusterGroup:    req.ClusterGroup,
 		ManagementGroup: req.ManagementGroup,
-		Desired:         req.Desired,
 		Status:          model.CommandPending,
 		CreatedAt:       time.Now().UTC(),
 	}
@@ -191,29 +205,106 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := model.CommandKey(s.clusterID, cmd.ID)
-
-	if s.putter == nil {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		return
-	}
-
-	if err := s.putter.Put(r.Context(), key, data); err != nil {
+	if err := s.putter.Put(r.Context(), model.CommandKey(s.clusterID, cmd.ID), data); err != nil {
 		s.log.Error("failed to write command", zap.Error(err))
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	s.log.Debug("command accepted", zap.String("command_id", cmd.ID), zap.String("key", key))
+	s.log.Info("command accepted", zap.String("id", cmd.ID), zap.String("type", string(cmd.Type)))
 
-	w.Header().Set("Content-Type", "application/json")
-
-	encoder := json.NewEncoder(w)
-	encoder.SetIndent("", "  ")
-
-	_ = encoder.Encode(map[string]any{
-		"accepted":   true,
-		"command_id": cmd.ID,
-		"status":     cmd.Status,
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"id":     cmd.ID,
+		"type":   cmd.Type,
+		"status": cmd.Status,
 	})
+}
+
+// validatePromote checks topology and IDLE constraints for a promote command.
+// Returns (0, "") if valid; (httpStatusCode, errorMessage) if blocked.
+func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, string) {
+	groupPrefix := model.ClusterGroup(s.clusterID, clusterGroup)
+	children := s.store.ListChildren(groupPrefix)
+
+	if len(children) == 0 {
+		return http.StatusBadRequest, fmt.Sprintf("cluster group %q not found or has no management groups", clusterGroup)
+	}
+
+	type mgInfo struct {
+		priority int
+		desired  model.DesiredState
+		hasCfg   bool
+	}
+	infos := make(map[string]mgInfo, len(children))
+	targetFound := false
+
+	for _, mg := range children {
+		info := mgInfo{}
+
+		if raw, ok := s.store.Get(model.ManagementGroupConfig(s.clusterID, clusterGroup, mg)); ok {
+			var doc model.ManagementGroupConfigDocument
+			if json.Unmarshal(raw, &doc) == nil {
+				info.priority = doc.Priority
+				info.hasCfg = true
+			}
+		}
+
+		if raw, ok := s.store.Get(model.Desired(s.clusterID, clusterGroup, mg)); ok {
+			var doc model.DesiredDocument
+			if json.Unmarshal(raw, &doc) == nil {
+				info.desired = doc.State
+			}
+		}
+
+		infos[mg] = info
+		if mg == managementGroup {
+			targetFound = true
+		}
+	}
+
+	if !targetFound {
+		return http.StatusBadRequest, fmt.Sprintf("management group %q not found in cluster group %q", managementGroup, clusterGroup)
+	}
+
+	// Detect active-active: all groups share the same priority
+	firstPri, firstSet, allSame := 0, false, true
+	for _, info := range infos {
+		if !info.hasCfg {
+			continue
+		}
+		if !firstSet {
+			firstPri = info.priority
+			firstSet = true
+			continue
+		}
+		if info.priority != firstPri {
+			allSame = false
+			break
+		}
+	}
+
+	if firstSet && allSame {
+		return http.StatusBadRequest, "promote is not applicable: all management groups have equal priority (active-active topology)"
+	}
+
+	// Active-passive: block if any other group is idle (actual state unknown)
+	for mg, info := range infos {
+		if mg == managementGroup {
+			continue
+		}
+		if info.desired == model.DesiredIdle {
+			return http.StatusConflict, fmt.Sprintf(
+				"cannot promote %q: management group %q has desired=idle (actual state unknown, may still be active)",
+				managementGroup, mg,
+			)
+		}
+	}
+
+	return 0, ""
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
 }

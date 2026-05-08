@@ -26,12 +26,14 @@ type Controller struct {
 	log   *zap.Logger
 
 	lastManagementGroups map[string][]string
+	switchoverStarted    map[string]time.Time // key: "clusterGroup/mgName" → when phase-1 began
 }
 
 type groupRuntime struct {
 	ClusterGroup    string
 	ManagementGroup string
 	Priority        int
+	Desired         model.DesiredState
 	Actual          model.ActualState
 	Health          model.HealthStatus
 	Available       bool
@@ -49,6 +51,7 @@ func New(cfg *config.Config, st *store.StateStore, etcdClient *etcd.Client, log 
 		etcd:                 etcdClient,
 		log:                  log,
 		lastManagementGroups: make(map[string][]string),
+		switchoverStarted:    make(map[string]time.Time),
 	}
 }
 
@@ -118,14 +121,12 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 			runtimes = append(runtimes, runtime)
 		}
 
-		if c.cfg.Cluster.FailoverMode == "automatic" {
-			if err := c.applyPriorityPolicy(ctx, clusterGroup, runtimes); err != nil {
-				c.log.Error(
-					"priority policy failed",
-					zap.String("cluster_group", clusterGroup),
-					zap.Error(err),
-				)
-			}
+		if err := c.applyPriorityPolicy(ctx, clusterGroup, runtimes); err != nil {
+			c.log.Error(
+				"priority policy failed",
+				zap.String("cluster_group", clusterGroup),
+				zap.Error(err),
+			)
 		}
 	}
 
@@ -320,6 +321,7 @@ func (c *Controller) reconcileManagementGroup(
 		ClusterGroup:    clusterGroup,
 		ManagementGroup: managementGroup,
 		Priority:        priority,
+		Desired:         desired,
 		Actual:          actualState,
 		Health:          healthStatus,
 		Available:       healthStatus != model.HealthFailed && actualState != model.ActualFailed,
@@ -436,43 +438,298 @@ func (c *Controller) expectedRoleStates(
 	return out
 }
 
-// applyPriorityPolicy selects the lowest-priority available group as active; sets all others to passive.
+// applyPriorityPolicy enforces priority-based desired states for all management groups in a cluster group.
+// In automatic mode it also handles priority swaps on failure. Always uses two-phase switchover to avoid
+// simultaneous active groups during transitions.
 func (c *Controller) applyPriorityPolicy(
 	ctx context.Context,
 	clusterGroup string,
 	groups []groupRuntime,
 ) error {
-	bestPriority := 0
-	hasCandidate := false
-
-	for _, group := range groups {
-		if !group.Available {
-			continue
-		}
-
-		if !hasCandidate || group.Priority < bestPriority {
-			bestPriority = group.Priority
-			hasCandidate = true
-		}
-	}
-
-	if !hasCandidate {
-		c.log.Warn("no available management groups for automatic failover", zap.String("cluster_group", clusterGroup))
+	if len(groups) == 0 {
 		return nil
 	}
 
-	for _, group := range groups {
-		target := model.DesiredPassive
-		if group.Available && group.Priority == bestPriority {
-			target = model.DesiredActive
+	// Automatic mode: when the top-priority group has failed, swap priorities with the next best.
+	if c.cfg.Cluster.FailoverMode == "automatic" {
+		if c.handleAutoFailover(ctx, clusterGroup, groups) {
+			return nil // priorities written; next reconcile applies them
+		}
+	}
+
+	// Active-active topology: all groups share the same priority → activate all non-idle groups.
+	if allSamePriority(groups) {
+		for _, g := range groups {
+			if c.cfg.Cluster.FailoverMode != "automatic" && g.Desired == model.DesiredIdle {
+				continue
+			}
+			if err := c.writeDesiredIfChanged(ctx, g.ClusterGroup, g.ManagementGroup, model.DesiredActive); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Active-passive topology: find the highest-priority available group.
+	target := c.findTarget(clusterGroup, groups)
+	if target == nil {
+		c.log.Warn("no available management groups for failover policy", zap.String("cluster_group", clusterGroup))
+		return nil
+	}
+
+	// Determine which group currently holds desired=active.
+	currentActive := ""
+	for _, g := range groups {
+		if g.Desired == model.DesiredActive {
+			currentActive = g.ManagementGroup
+			break
+		}
+	}
+
+	// Already correct: ensure all other non-idle groups are passive.
+	if currentActive == target.ManagementGroup {
+		for _, g := range groups {
+			if g.ManagementGroup == target.ManagementGroup {
+				continue
+			}
+			if c.cfg.Cluster.FailoverMode != "automatic" && g.Desired == model.DesiredIdle {
+				continue
+			}
+			if err := c.writeDesiredIfChanged(ctx, g.ClusterGroup, g.ManagementGroup, model.DesiredPassive); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Two-phase switchover needed.
+	// Phase 1: wait for current active group to reach passive or failed.
+	if currentActive != "" {
+		var curActual model.ActualState
+		for _, g := range groups {
+			if g.ManagementGroup == currentActive {
+				curActual = g.Actual
+				break
+			}
 		}
 
-		if err := c.writeDesiredIfChanged(ctx, group.ClusterGroup, group.ManagementGroup, target); err != nil {
+		if curActual != model.ActualPassive && curActual != model.ActualFailed && curActual != model.ActualIdle {
+			if err := c.writeDesiredIfChanged(ctx, clusterGroup, currentActive, model.DesiredPassive); err != nil {
+				return err
+			}
+
+			switchKey := clusterGroup + "/" + currentActive
+			if _, ok := c.switchoverStarted[switchKey]; !ok {
+				c.switchoverStarted[switchKey] = time.Now()
+			} else {
+				T := c.switchoverTimeout(clusterGroup, currentActive)
+				if time.Since(c.switchoverStarted[switchKey]) > T {
+					c.log.Warn("switchover timeout: group did not reach passive/failed in time",
+						zap.String("cluster_group", clusterGroup),
+						zap.String("management_group", currentActive),
+						zap.Duration("timeout", T),
+					)
+					delete(c.switchoverStarted, switchKey)
+				}
+			}
+			return nil
+		}
+
+		delete(c.switchoverStarted, clusterGroup+"/"+currentActive)
+	}
+
+	// Phase 2: activate target group.
+	if err := c.writeDesiredIfChanged(ctx, target.ClusterGroup, target.ManagementGroup, model.DesiredActive); err != nil {
+		return err
+	}
+
+	for _, g := range groups {
+		if g.ManagementGroup == target.ManagementGroup {
+			continue
+		}
+		if c.cfg.Cluster.FailoverMode != "automatic" && g.Desired == model.DesiredIdle {
+			continue
+		}
+		if err := c.writeDesiredIfChanged(ctx, g.ClusterGroup, g.ManagementGroup, model.DesiredPassive); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// allSamePriority returns true if all groups in the slice share the same priority value.
+func allSamePriority(groups []groupRuntime) bool {
+	if len(groups) == 0 {
+		return true
+	}
+	p := groups[0].Priority
+	for _, g := range groups[1:] {
+		if g.Priority != p {
+			return false
+		}
+	}
+	return true
+}
+
+// findTarget returns the highest-priority (lowest Priority value) available group.
+// In manual mode, groups with desired=idle are excluded from candidacy.
+func (c *Controller) findTarget(clusterGroup string, groups []groupRuntime) *groupRuntime {
+	var result *groupRuntime
+	for i := range groups {
+		g := &groups[i]
+		if c.cfg.Cluster.FailoverMode != "automatic" && g.Desired == model.DesiredIdle {
+			continue
+		}
+		if !g.Available {
+			continue
+		}
+		if result == nil || g.Priority < result.Priority {
+			result = g
+		}
+	}
+	return result
+}
+
+// switchoverTimeout calculates the worst-case time for a management group to reach passive/failed,
+// derived from its roles' check_interval + converge + exec timeouts. Falls back to 30s if unknown.
+func (c *Controller) switchoverTimeout(clusterGroup, managementGroup string) time.Duration {
+	mgMap, ok := c.cfg.ManagementGroups[clusterGroup]
+	if !ok {
+		return 30 * time.Second
+	}
+	mgCfg, ok := mgMap[managementGroup]
+	if !ok {
+		return 30 * time.Second
+	}
+
+	var maxT time.Duration
+	for _, roleID := range mgCfg.Roles {
+		roleCfg, ok := c.cfg.Roles[roleID]
+		if !ok {
+			continue
+		}
+		t := roleCfg.Timeouts.CheckInterval.Duration +
+			roleCfg.Timeouts.Converge.Duration +
+			roleCfg.Timeouts.Exec.Duration
+		if t > maxT {
+			maxT = t
+		}
+	}
+
+	if maxT == 0 {
+		return 30 * time.Second
+	}
+	return maxT
+}
+
+// writePriority updates the Priority field of a management group's config document in etcd.
+func (c *Controller) writePriority(ctx context.Context, clusterGroup, managementGroup string, priority int) {
+	key := model.ManagementGroupConfig(c.cfg.Cluster.ID, clusterGroup, managementGroup)
+
+	raw, ok := c.store.Get(key)
+	if !ok {
+		c.log.Warn("management group config not found for priority update",
+			zap.String("cluster_group", clusterGroup),
+			zap.String("management_group", managementGroup),
+		)
+		return
+	}
+
+	var doc model.ManagementGroupConfigDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		c.log.Error("failed to decode management group config for priority update", zap.Error(err))
+		return
+	}
+
+	if doc.Priority == priority {
+		return
+	}
+
+	doc.Priority = priority
+	doc.UpdatedAt = time.Now().UTC()
+
+	data, err := json.Marshal(doc)
+	if err != nil {
+		c.log.Error("failed to marshal management group config", zap.Error(err))
+		return
+	}
+
+	c.log.Info("writing management group priority",
+		zap.String("cluster_group", clusterGroup),
+		zap.String("management_group", managementGroup),
+		zap.Int("priority", priority),
+	)
+
+	if err := c.etcd.Put(ctx, key, data); err != nil {
+		c.log.Error("failed to write management group priority", zap.Error(err))
+	}
+}
+
+// handleAutoFailover detects when the top-priority group has failed and swaps its priority with
+// the next best available group. Returns true if priorities were changed (caller should skip
+// further policy application and wait for the next reconcile cycle).
+func (c *Controller) handleAutoFailover(ctx context.Context, clusterGroup string, groups []groupRuntime) bool {
+	// Find the minimum priority value.
+	minPri := -1
+	for _, g := range groups {
+		if minPri < 0 || g.Priority < minPri {
+			minPri = g.Priority
+		}
+	}
+	if minPri < 0 {
+		return false
+	}
+
+	// Check if any top-priority group is unavailable (failed).
+	topFailed := false
+	for _, g := range groups {
+		if g.Priority == minPri && !g.Available {
+			topFailed = true
+			break
+		}
+	}
+	if !topFailed {
+		return false
+	}
+
+	// Find the next best priority among available groups.
+	nextPri := -1
+	for _, g := range groups {
+		if !g.Available {
+			continue
+		}
+		if nextPri < 0 || g.Priority < nextPri {
+			nextPri = g.Priority
+		}
+	}
+	if nextPri < 0 {
+		c.log.Warn("auto failover: no available groups to promote", zap.String("cluster_group", clusterGroup))
+		return false
+	}
+
+	// Swap: failed top-priority groups get nextPri; next-best available groups get minPri.
+	for _, g := range groups {
+		if g.Priority == minPri && !g.Available {
+			c.writePriority(ctx, clusterGroup, g.ManagementGroup, nextPri)
+			c.log.Info("auto failover: demoted failed group",
+				zap.String("cluster_group", clusterGroup),
+				zap.String("management_group", g.ManagementGroup),
+				zap.Int("old_priority", minPri),
+				zap.Int("new_priority", nextPri),
+			)
+		} else if g.Priority == nextPri && g.Available {
+			c.writePriority(ctx, clusterGroup, g.ManagementGroup, minPri)
+			c.log.Info("auto failover: promoted group",
+				zap.String("cluster_group", clusterGroup),
+				zap.String("management_group", g.ManagementGroup),
+				zap.Int("old_priority", nextPri),
+				zap.Int("new_priority", minPri),
+			)
+		}
+	}
+
+	return true
 }
 
 func (c *Controller) writeDesiredIfChanged(
