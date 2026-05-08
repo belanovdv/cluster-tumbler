@@ -199,12 +199,6 @@ func (w *Worker) reconcile(ctx context.Context) error {
 	}
 
 	if w.lastCheckAt.IsZero() || now.Sub(w.lastCheckAt) >= checkInterval {
-		w.log.Debug(
-			"running periodic role convergence check",
-			zap.String("desired", string(desired)),
-			zap.Duration("check_interval", checkInterval),
-		)
-
 		w.lastCheckAt = now
 		w.startDesiredExecution(ctx, desired)
 	}
