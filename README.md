@@ -115,6 +115,8 @@ node:
   node_id: node1
   name: "Node 1"
   actors_base_dir: "."    # base directory for relative actor paths
+  disable_api: false        # set true to suppress HTTP API and Web UI on this node
+  disable_controller: false # set true to exclude this node from leader election
 
   memberships:
     - cluster_group: geo_dc
@@ -148,6 +150,17 @@ roles:
 ```
 
 Actor commands accept both string (`"script.sh arg"`) and list (`["script.sh", "arg"]`) YAML forms.
+
+### Restricting a Node (Unsafe Zones)
+
+`node.disable_api` and `node.disable_controller` are intended for agents deployed in untrusted network zones. The corresponding CLI flags override the config file values at startup:
+
+```bash
+--disable-api         # do not start HTTP API and Web UI
+--disable-controller  # do not participate in leader election
+```
+
+> **Warning:** Every node with `disable_controller: true` reduces the number of candidates for the controller role. If all nodes in a cluster have it set, automatic failover stops working entirely. Use these options only for nodes in untrusted zones where the security risk outweighs the redundancy benefit.
 
 ---
 
@@ -209,10 +222,12 @@ go run ./cmd/main.go \
   --config ./test/testdata/configs/config.node1.yaml \
   --etcd 10.20.248.77:2379
 
-# Node 2 (separate host)
+# Node 2 — in an untrusted zone: no API, no controller
 go run ./cmd/main.go \
   --config ./test/testdata/configs/config.node2.yaml \
-  --etcd 10.20.248.77:2379
+  --etcd 10.20.248.77:2379 \
+  --disable-api \
+  --disable-controller
 ```
 
 `--etcd` is repeatable and overrides `etcd.endpoints` from the config file:
