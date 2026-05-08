@@ -2,7 +2,7 @@
 
 **Decentralised high-availability cluster management platform built on a peer agent network with a reactive event model and distributed configuration in etcd.**
 
-Each node runs an identical agent binary. Agents synchronise state through etcd using a watch-based event mechanism and reactively apply configuration prescriptions (desired states). Every node exposes its own built-in Web UI and HTTP API, making the system resilient to single-node failures and independent of any central management server.
+Each node runs an identical agent binary. Agents synchronise state through etcd using a watch-based event mechanism and reactively apply configuration prescriptions (desired states). Every node exposes its own built-in HTTP API and a draft monitoring Web UI, making the system resilient to single-node failures and independent of any central management server.
 
 ---
 
@@ -251,6 +251,8 @@ All `/api/v1/*` endpoints accept an optional `Authorization: Bearer <token>` hea
 
 ### POST /api/v1/commands
 
+> **Partial implementation.** Writing a command document is supported. The leader-side processor that reads the queue, applies the desired state change, and archives the result is not yet implemented.
+
 ```json
 {
   "type": "set_desired",
@@ -264,6 +266,8 @@ All `/api/v1/*` endpoints accept an optional `Authorization: Bearer <token>` hea
 
 ## Web UI
 
+> **Draft.** The current UI is a preliminary implementation for state visibility only. Full UI development — including design, authentication, and control elements — is planned but not yet started.
+
 Available at `http://<node>:5080/`
 
 The single-page dashboard connects to `/api/v1/stream` via `EventSource` and updates in real time without page reload. It shows:
@@ -272,7 +276,11 @@ The single-page dashboard connects to `/api/v1/stream` via `EventSource` and upd
 - Per-node role states with actor output details.
 - Registry and session status of all connected agents.
 
-UI-driven commands and config editing are not yet implemented.
+Not yet implemented in UI:
+- Desired state control (active / passive / idle)
+- Config editor
+- History and diff view
+- Authentication / access control
 
 ---
 
@@ -291,20 +299,18 @@ UI-driven commands and config editing are not yet implemented.
 - `roles.defaults` — base timeouts/actors shared across roles
 - `actors_base_dir` — configurable base directory for actor paths
 - `--etcd` CLI flag (repeatable, overrides config)
+- `--disable-api` / `--disable-controller` CLI flags (unsafe zone support)
 - JSON API (`/api/v1/state`)
 - SSE live-update stream (`/api/v1/stream`)
 - Command producer API (`/api/v1/commands`)
-- Embedded Web UI with live state
 
 ### Partially Implemented
 - Command queue — write side only; leader-side processor not implemented
+- Draft Web UI — live state monitoring only
 - Config watcher — detects etcd config changes but does not propagate to running workers
 
 ### Not Implemented
 - Command queue consumer (leader reads `commands/`, executes, archives to `commands_history/`)
-- UI-driven desired state changes
-- Config editor in UI
-- History / diff view in UI
+- Full Web UI (design, authentication, control elements — desired state, config editor, history/diff)
 - Auto failback policy
-- Anti-flapping logic
-- Quorum-aware failover policy
+- Anti-flapping logic — prevents the controller from rapidly toggling `desired` when a group's health oscillates; requires a stabilisation window before a failover decision is applied

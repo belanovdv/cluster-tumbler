@@ -70,10 +70,12 @@ type ClusterGroupConfig struct {
 }
 
 type NodeConfig struct {
-	NodeID        string             `yaml:"node_id"`
-	Name          string             `yaml:"name"`
-	ActorsBaseDir string             `yaml:"actors_base_dir"`
-	Memberships   []MembershipConfig `yaml:"memberships"`
+	NodeID             string             `yaml:"node_id"`
+	Name               string             `yaml:"name"`
+	ActorsBaseDir      string             `yaml:"actors_base_dir"`
+	DisableAPI         bool               `yaml:"disable_api"`
+	DisableController  bool               `yaml:"disable_controller"`
+	Memberships        []MembershipConfig `yaml:"memberships"`
 }
 
 type MembershipConfig struct {

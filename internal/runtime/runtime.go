@@ -110,11 +110,15 @@ func New(cfg *config.Config) (*Runtime, error) {
 func (r *Runtime) Run(ctx context.Context) error {
 	r.log.Info("starting cluster-agent")
 
-	go func() {
-		if err := r.api.Run(ctx); err != nil {
-			r.log.Error("api server failed", zap.Error(err))
-		}
-	}()
+	if !r.cfg.Node.DisableAPI {
+		go func() {
+			if err := r.api.Run(ctx); err != nil {
+				r.log.Error("api server failed", zap.Error(err))
+			}
+		}()
+	} else {
+		r.log.Info("api server disabled")
+	}
 
 	if err := r.connectETCD(ctx); err != nil {
 		return err
@@ -156,13 +160,16 @@ func (r *Runtime) Run(ctx context.Context) error {
 		}
 	}()
 
-	go func() {
-		if err := r.leader.Run(ctx); err != nil && err != context.Canceled {
-			r.log.Error("leadership manager failed", zap.Error(err))
-		}
-	}()
-
-	go r.controllerWhenLeader(ctx)
+	if !r.cfg.Node.DisableController {
+		go func() {
+			if err := r.leader.Run(ctx); err != nil && err != context.Canceled {
+				r.log.Error("leadership manager failed", zap.Error(err))
+			}
+		}()
+		go r.controllerWhenLeader(ctx)
+	} else {
+		r.log.Info("controller disabled, node will not participate in leader election")
+	}
 
 	<-ctx.Done()
 
