@@ -59,7 +59,7 @@ func (e *RoleExecutor) forceStop(ctx context.Context, req RoleRequest) RoleStatu
 	return failedActor(res)
 }
 
-// Reconcile is the entry point for role convergence; dispatches to ensure (active/passive) or returns idle status.
+// Reconcile is the entry point for role convergence; dispatches to ensure (active/passive) or reconcileIdle.
 func (e *RoleExecutor) Reconcile(ctx context.Context, req RoleRequest, onTransition func(RoleStatus)) RoleStatus {
 	switch req.Desired {
 	case "active":
@@ -67,14 +67,51 @@ func (e *RoleExecutor) Reconcile(ctx context.Context, req RoleRequest, onTransit
 	case "passive":
 		return e.ensure(ctx, req, ProbePassive, SetPassive, "passive", "stopping", onTransition)
 	case "idle":
-		return RoleStatus{
-			State:  "idle",
-			Health: "warning",
-			Details: map[string]any{
-				"message": "Node is in maintenance mode",
-			},
-		}
+		return e.reconcileIdle(ctx, req)
 	default:
 		return failed("unsupported desired state")
+	}
+}
+
+// reconcileIdle implements the idle probe loop: holds actual=active while probe_active passes;
+// on probe failure runs set_passive (force_stop fallback) and reports actual=idle.
+func (e *RoleExecutor) reconcileIdle(ctx context.Context, req RoleRequest) RoleStatus {
+	if cmd, ok := e.Actors[ProbeActive]; ok {
+		res := e.Runner.Run(ctx, e.build(req, ProbeActive, cmd), 1)
+		if res.ErrorType == ErrorExec {
+			return failedActor(res)
+		}
+		if res.OK {
+			return RoleStatus{
+				State:  "active",
+				Health: "warning",
+				Details: map[string]any{
+					"message": "Unmanaged: services active (desired=idle)",
+					"stdout":  res.Stdout,
+					"stderr":  res.Stderr,
+				},
+			}
+		}
+	}
+
+	// probe_active failed or not configured — ensure services are stopped, then hand off.
+	deadlineCtx, cancel := context.WithTimeout(ctx, e.Converge)
+	defer cancel()
+
+	stopped := false
+	if cmd, ok := e.Actors[SetPassive]; ok {
+		res := e.Runner.Run(deadlineCtx, e.build(req, SetPassive, cmd), 1)
+		if res.ErrorType != ErrorExec && res.OK {
+			stopped = true
+		}
+	}
+	if !stopped {
+		e.forceStop(ctx, req)
+	}
+
+	return RoleStatus{
+		State:   "idle",
+		Health:  "warning",
+		Details: map[string]any{"message": "Idle"},
 	}
 }

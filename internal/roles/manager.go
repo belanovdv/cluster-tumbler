@@ -197,10 +197,6 @@ func (w *Worker) reconcile(ctx context.Context) error {
 		return nil
 	}
 
-	if desired == model.DesiredIdle {
-		return nil
-	}
-
 	if w.lastCheckAt.IsZero() || now.Sub(w.lastCheckAt) >= checkInterval {
 		w.log.Debug(
 			"running periodic role convergence check",

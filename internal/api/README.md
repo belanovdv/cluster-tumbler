@@ -17,4 +17,4 @@ Bearer token auth is optional: when `api.token` is empty all requests pass throu
 
 The handler validates the `type` field (must be `promote`, `disable`, or `reload`) and the required `cluster_group` / `management_group` fields. For `promote`, `validatePromote` additionally checks:
 - active-active topology (all groups equal priority) → `400`
-- any sibling group has `desired=idle` → `409`
+- any sibling group has `desired=idle` **and** `actual=active|starting` → `409`

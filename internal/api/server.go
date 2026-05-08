@@ -233,6 +233,7 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 	type mgInfo struct {
 		priority int
 		desired  model.DesiredState
+		actual   model.ActualState
 		hasCfg   bool
 	}
 	infos := make(map[string]mgInfo, len(children))
@@ -253,6 +254,13 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 			var doc model.DesiredDocument
 			if json.Unmarshal(raw, &doc) == nil {
 				info.desired = doc.State
+			}
+		}
+
+		if raw, ok := s.store.Get(model.Actual(s.clusterID, clusterGroup, mg)); ok {
+			var doc model.ActualDocument
+			if json.Unmarshal(raw, &doc) == nil {
+				info.actual = doc.State
 			}
 		}
 
@@ -287,15 +295,17 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 		return http.StatusBadRequest, "promote is not applicable: all management groups have equal priority (active-active topology)"
 	}
 
-	// Active-passive: block if any other group is idle (actual state unknown)
+	// Active-passive: block only if a sibling with desired=idle has services that may still be running.
+	// actual=idle/passive/failed means services are confirmed down; allow promote in those cases.
 	for mg, info := range infos {
 		if mg == managementGroup {
 			continue
 		}
-		if info.desired == model.DesiredIdle {
+		if info.desired == model.DesiredIdle &&
+			(info.actual == model.ActualActive || info.actual == model.ActualStarting) {
 			return http.StatusConflict, fmt.Sprintf(
-				"cannot promote %q: management group %q has desired=idle (actual state unknown, may still be active)",
-				managementGroup, mg,
+				"cannot promote %q: management group %q has desired=idle but actual=%s (services may still be active)",
+				managementGroup, mg, info.actual,
 			)
 		}
 	}

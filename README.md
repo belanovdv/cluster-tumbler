@@ -279,7 +279,7 @@ curl -X POST http://node1:5080/api/v1/commands \
 **Response codes:** `202 Accepted` — command queued; `409 Conflict` — blocked by current state; `400 Bad Request` — invalid parameters.
 
 **`promote` constraints (active-passive topology):**
-- Blocked if any other group has `desired=idle` (actual service state unknown).
+- Blocked if any other group has `desired=idle` **and** `actual=active|starting` (services may still be running).
 - Not applicable in active-active topology (all groups have equal priority).
 
 **Switchover consistency:** the controller uses a two-phase approach — it waits for the stopping group to reach `actual=passive|failed` before activating the target. Wait timeout is derived from role timeouts: `max(check_interval + converge + exec)` across the group's roles.

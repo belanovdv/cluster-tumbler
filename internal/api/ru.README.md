@@ -17,4 +17,4 @@ Bearer-токен аутентификация опциональна: если 
 
 Обработчик проверяет поле `type` (должно быть `promote`, `disable` или `reload`) и обязательные поля `cluster_group` / `management_group`. Для `promote` дополнительно выполняется `validatePromote`:
 - active-active топология (все группы имеют одинаковый приоритет) → `400`
-- любая смежная группа имеет `desired=idle` → `409`
+- любая смежная группа имеет `desired=idle` **и** `actual=active|starting` → `409`
