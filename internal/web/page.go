@@ -1,3 +1,4 @@
+// Package web serves the embedded HTML dashboard and static assets.
 package web
 
 import (

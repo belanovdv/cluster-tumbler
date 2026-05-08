@@ -1,3 +1,4 @@
+// Package controller implements the leader-only reconciliation loop for cluster state.
 package controller
 
 import (
@@ -12,7 +13,6 @@ import (
 
 	"cluster-tumbler/internal/config"
 	"cluster-tumbler/internal/etcd"
-	"cluster-tumbler/internal/keys"
 	"cluster-tumbler/internal/model"
 	"cluster-tumbler/internal/store"
 
@@ -76,6 +76,7 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 }
 
+// Reconcile is the entry point for one reconciliation cycle: iterates every management group and applies policy.
 func (c *Controller) Reconcile(ctx context.Context) error {
 	if !c.store.Ready() {
 		c.log.Debug("state store is not ready, skip reconcile")
@@ -83,7 +84,7 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 	}
 
 	for clusterGroup := range c.cfg.Cluster.Groups {
-		groupPrefix := keys.ClusterGroup(c.cfg.Cluster.ID, clusterGroup)
+		groupPrefix := model.ClusterGroup(c.cfg.Cluster.ID, clusterGroup)
 		managementGroups := c.store.ListChildren(groupPrefix)
 
 		if !reflect.DeepEqual(c.lastManagementGroups[clusterGroup], managementGroups) {
@@ -131,12 +132,13 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 	return nil
 }
 
+// reconcileManagementGroup aggregates per-role actual/health into a group-level state and writes if changed.
 func (c *Controller) reconcileManagementGroup(
 	ctx context.Context,
 	clusterGroup string,
 	managementGroup string,
 ) (groupRuntime, error) {
-	prefix := keys.ManagementGroup(c.cfg.Cluster.ID, clusterGroup, managementGroup)
+	prefix := model.ManagementGroup(c.cfg.Cluster.ID, clusterGroup, managementGroup)
 	items := c.store.Prefix(prefix)
 	now := time.Now().UTC()
 
@@ -180,7 +182,7 @@ func (c *Controller) reconcileManagementGroup(
 				continue
 			}
 
-			if key == keys.Actual(c.cfg.Cluster.ID, clusterGroup, managementGroup) {
+			if key == model.Actual(c.cfg.Cluster.ID, clusterGroup, managementGroup) {
 				continue
 			}
 
@@ -273,8 +275,8 @@ func (c *Controller) reconcileManagementGroup(
 		}
 	}
 
-	actualKey := keys.Actual(c.cfg.Cluster.ID, clusterGroup, managementGroup)
-	healthKey := keys.Health(c.cfg.Cluster.ID, clusterGroup, managementGroup)
+	actualKey := model.Actual(c.cfg.Cluster.ID, clusterGroup, managementGroup)
+	healthKey := model.Health(c.cfg.Cluster.ID, clusterGroup, managementGroup)
 
 	actualChanged, actualData, err := c.buildActualIfChanged(actualKey, actualState, details, now)
 	if err != nil {
@@ -325,7 +327,7 @@ func (c *Controller) reconcileManagementGroup(
 }
 
 func (c *Controller) readDesired(clusterGroup string, managementGroup string) model.DesiredState {
-	key := keys.Desired(c.cfg.Cluster.ID, clusterGroup, managementGroup)
+	key := model.Desired(c.cfg.Cluster.ID, clusterGroup, managementGroup)
 
 	raw, ok := c.store.Get(key)
 	if !ok {
@@ -340,6 +342,7 @@ func (c *Controller) readDesired(clusterGroup string, managementGroup string) mo
 	return doc.State
 }
 
+// missingExpectedRoleStates returns keys for roles that should have actual/health but do not (agent lost).
 func (c *Controller) missingExpectedRoleStates(
 	clusterGroup string,
 	managementGroup string,
@@ -352,7 +355,7 @@ func (c *Controller) missingExpectedRoleStates(
 	missing := make([]string, 0)
 
 	for _, item := range expected {
-		actualKey := keys.RoleActual(
+		actualKey := model.RoleActual(
 			c.cfg.Cluster.ID,
 			clusterGroup,
 			managementGroup,
@@ -360,7 +363,7 @@ func (c *Controller) missingExpectedRoleStates(
 			item.Role,
 		)
 
-		healthKey := keys.RoleHealth(
+		healthKey := model.RoleHealth(
 			c.cfg.Cluster.ID,
 			clusterGroup,
 			managementGroup,
@@ -384,11 +387,12 @@ func (c *Controller) missingExpectedRoleStates(
 	return missing
 }
 
+// expectedRoleStates builds the list of (node, role) pairs expected in a group from the registry.
 func (c *Controller) expectedRoleStates(
 	clusterGroup string,
 	managementGroup string,
 ) []expectedRoleState {
-	registryItems := c.store.Prefix(keys.RegistryRoot(c.cfg.Cluster.ID))
+	registryItems := c.store.Prefix(model.RegistryRoot(c.cfg.Cluster.ID))
 	if len(registryItems) == 0 {
 		return nil
 	}
@@ -396,7 +400,7 @@ func (c *Controller) expectedRoleStates(
 	out := make([]expectedRoleState, 0)
 
 	for key, raw := range registryItems {
-		if strings.Contains(strings.TrimPrefix(key, keys.RegistryRoot(c.cfg.Cluster.ID)+"/"), "/") {
+		if strings.Contains(strings.TrimPrefix(key, model.RegistryRoot(c.cfg.Cluster.ID)+"/"), "/") {
 			continue
 		}
 
@@ -408,7 +412,7 @@ func (c *Controller) expectedRoleStates(
 
 		nodeID := reg.NodeID
 		if nodeID == "" {
-			nodeID = strings.TrimPrefix(key, keys.RegistryRoot(c.cfg.Cluster.ID)+"/")
+			nodeID = strings.TrimPrefix(key, model.RegistryRoot(c.cfg.Cluster.ID)+"/")
 		}
 
 		for _, membership := range reg.Memberships {
@@ -432,6 +436,7 @@ func (c *Controller) expectedRoleStates(
 	return out
 }
 
+// applyPriorityPolicy selects the lowest-priority available group as active; sets all others to passive.
 func (c *Controller) applyPriorityPolicy(
 	ctx context.Context,
 	clusterGroup string,
@@ -476,7 +481,7 @@ func (c *Controller) writeDesiredIfChanged(
 	managementGroup string,
 	target model.DesiredState,
 ) error {
-	key := keys.Desired(c.cfg.Cluster.ID, clusterGroup, managementGroup)
+	key := model.Desired(c.cfg.Cluster.ID, clusterGroup, managementGroup)
 
 	raw, exists := c.store.Get(key)
 	if exists {
@@ -509,7 +514,7 @@ func (c *Controller) writeDesiredIfChanged(
 }
 
 func (c *Controller) readPriority(clusterGroup string, managementGroup string) int {
-	key := keys.ManagementGroupConfig(c.cfg.Cluster.ID, clusterGroup, managementGroup)
+	key := model.ManagementGroupConfig(c.cfg.Cluster.ID, clusterGroup, managementGroup)
 
 	raw, ok := c.store.Get(key)
 	if !ok {
@@ -528,6 +533,7 @@ func (c *Controller) readPriority(clusterGroup string, managementGroup string) i
 	return doc.Priority
 }
 
+// buildActualIfChanged serialises a new ActualDocument only when state or details differ from the stored value.
 func (c *Controller) buildActualIfChanged(
 	key string,
 	state model.ActualState,
@@ -562,6 +568,7 @@ func (c *Controller) buildActualIfChanged(
 	return true, data, nil
 }
 
+// buildHealthIfChanged serialises a new HealthDocument only when status or details differ from the stored value.
 func (c *Controller) buildHealthIfChanged(
 	key string,
 	status model.HealthStatus,

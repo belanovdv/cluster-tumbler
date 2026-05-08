@@ -1,250 +1,295 @@
 # cluster-tumbler
 
-`cluster-tumbler` — агент оркестрации high availability on-premise кластеров.
+**Decentralised high-availability cluster management platform built on a peer agent network with a reactive event model and distributed configuration in etcd.**
 
-Проект предназначен для управления состояниями конечных точек nodes через набор автоматов roles поддерживающих состояния
- `ACTIVE`, `PASSIVE`, `IDLE`, наблюдать фактическое состояние и координировать failover через общий согласованный backend.
+Each node runs an identical agent binary. Agents synchronise state through etcd using a watch-based event mechanism and reactively apply configuration prescriptions (desired states). Every node exposes its own built-in Web UI and HTTP API, making the system resilient to single-node failures and independent of any central management server.
 
-На текущем этапе backend — ETCD.
+---
 
-## Простая идея
+## Architecture
 
-Каждый агент установлен на node.
+```
+  Node 1 (agent)          Node 2 (agent)          Node N (agent)
+  ┌──────────────┐        ┌──────────────┐        ┌──────────────┐
+  │  Web UI      │        │  Web UI      │        │  Web UI      │
+  │  HTTP API    │        │  HTTP API    │        │  HTTP API    │
+  │  Role workers│        │  Role workers│        │  Role workers│
+  │  Session mgr │        │  Session mgr │        │  Session mgr │
+  │  [Controller]│        │  [Controller]│        │  [Controller]│
+  └──────┬───────┘        └──────┬───────┘        └──────┬───────┘
+         │                       │                       │
+         └───────────────────────┼───────────────────────┘
+                                 │
+                          ┌──────▼──────┐
+                          │    etcd     │
+                          └─────────────┘
+```
 
-Agent:
-- читает локальную конфигурацию;
-- регистрирует себя в ETCD;
-- поддерживает session lease;
-- публикует состояния своих ролей;
-- может стать controller leader;
-- отдает HTTP API и Web UI.
+One agent per cluster holds the **leadership lease** and runs the **controller** — the reconciliation loop that aggregates state and applies failover policy. All other agents run role workers only. Leadership changes automatically on lease expiry.
 
-Controller leader:
-- анализирует общее дерево ETCD;
-- агрегирует состояние management groups;
-- в automatic mode применяет priority-based failover.
+---
 
-## Основные сущности
+## Core Concepts
 
 ### Cluster
+The root of the etcd key tree. Identified by `cluster.id` in config.
 
-Корень дерева:
-
-```text
-/{cluster_id}/cluster
+### Cluster Group
+A logical management context — e.g. a geographic location, a service type, or an infrastructure layer.
 ```
-
-### Cluster group
-Логический контекст управления:
-
-```text
 /{cluster_id}/cluster/{cluster_group}
 ```
-Примеры:
-```text
-geo_dc
-rabbitmq
-corevm
-```
+Examples: `geo_dc`, `rabbitmq`, `corevm`
 
-### Management group
+### Management Group
+The unit of failover within a cluster group. Each management group has its own `desired` state and aggregated `actual`/`health`.
+```
+/{cluster_id}/cluster/{cluster_group}/{management_group}
+```
+Examples (DC scenario): `geo_dc/DC1`, `geo_dc/DC2`
+Examples (instance scenario): `rabbitmq/node1`, `rabbitmq/node2`
 
-Единица управления внутри cluster group.
+### Desired / Actual / Health States
 
-Для DC-сценария:
-```text
-geo_dc/DC1
-geo_dc/DC2
-```
-Для instance-сценария:
-```text
-rabbitmq/node1
-rabbitmq/node2
-rabbitmq/node3
-```
-### Desired
-Предписание хранится на уровне management group:
+**Desired** — the prescribed state for a management group, set by the controller or via the API:
 
-```text
-/{cluster_id}/cluster/{cluster_group}/{management_group}/desired
-```
-Пример:
-```json
-{
-  "state": "active",
-  "updated_at": "..."
-}
-```
+| Value | Meaning |
+|---|---|
+| `active` | Group should be active |
+| `passive` | Group should be passive (standby) |
+| `idle` | Group in maintenance / unconfigured |
 
-## Role state
-Фактическое состояние роли:
+**Actual** — the observed aggregate state of all roles in the group:
+`idle` · `starting` · `active` · `passive` · `stopping` · `failed`
 
-```text
-/{cluster_id}/cluster/{cluster_group}/{management_group}/{node_id}/{role}/actual
-/{cluster_id}/cluster/{cluster_group}/{management_group}/{node_id}/{role}/health
-```
+**Health**: `ok` · `warning` · `failed`
 
-### Aggregate state
+### Role
 
-Controller рассчитывает состояние management group:
-```text
-/{cluster_id}/cluster/{cluster_group}/{management_group}/actual
-/{cluster_id}/cluster/{cluster_group}/{management_group}/health
-```
-Правила текущей агрегации:
-```
-все роли active  -> management group active / ok
-все роли passive -> management group passive / ok
-есть failed      -> management group failed / failed
-есть idle        -> management group idle / warning
-mixed active/passive -> management group failed / failed
-```
-## Registry и session
+Each management group defines a list of roles (e.g. `core`, `mc`, `postgresql`). Each role is executed by a worker on every member node and transitions through states using **actor scripts**.
 
-Глобальная регистрация физического агента:
-```
-/{cluster_id}/cluster/registry/{node_id}
-```
+### Actors
 
-Глобальная live session агента:
-```
-/{cluster_id}/cluster/session/{node_id}
-```
-- `registry` описывает memberships агента.
-- `session` живет под ETCD lease и отражает liveness агента.
+Each role is driven by up to five actor scripts:
 
-## Config и priority
+| Actor | Purpose |
+|---|---|
+| `probe_active` | Check if role is active; exit 0 = already active |
+| `set_active` | Transition role to active |
+| `probe_passive` | Check if role is passive; exit 0 = already passive |
+| `set_passive` | Transition role to passive |
+| `force_stop` | Emergency stop used on converge timeout |
 
-Конфигурация management group:
-```
-/{cluster_id}/cluster/config/{cluster_group}/{management_group}
-```
+Scripts receive context via environment variables: `CT_ACTOR`, `CT_CLUSTER_GROUP`, `CT_MANAGEMENT_GROUP`, `CT_NODE_ID`, `CT_ROLE`, `CT_DESIRED`.
 
-Пример:
-```json
-{
-  "priority": 1,
-  "updated_at": "..."
-}
-```
-Priority используется controller в `automatic` режиме.
+Convergence loop: **probe → (if not done) → set → retry** until success or `timeouts.converge` expires.
 
-## Priority-based failover
+---
 
-Если включено:
+## Configuration
+
+A single YAML file per node. Key sections:
+
 ```yaml
+etcd:
+  endpoints: ["10.20.248.77:2379"]
+  dial_timeout: 3s
+  retry_interval: 1s
+
+api:
+  listen: ":5080"
+  # token: "secret"       # optional Bearer token for /api/v1/*
+
 cluster:
-  failover_mode: automatic
+  id: my_cluster
+  name: "My Cluster"
+  groups:
+    geo_dc:
+      name: "Geographic DC"
+  failover_mode: manual   # or: automatic
+  leader_ttl: 2s
+  leader_renew_interval: 500ms
+  session_ttl: 30s
+
+node:
+  node_id: node1
+  name: "Node 1"
+  actors_base_dir: "."    # base directory for relative actor paths
+
+  memberships:
+    - cluster_group: geo_dc
+      management_group: DC1
+
+management_groups:
+  geo_dc:
+    DC1:
+      priority: 1         # lower = preferred in automatic failover
+      roles:
+        - core
+        - mc
+
+roles:
+  defaults:               # applied to all roles unless overridden
+    timeouts:
+      exec: 5s
+      converge: 10s
+      retry_interval: 1s
+      check_interval: 5s
+      details_max_size: 4096
+
+  core:
+    name: "Core Service"
+    actors:
+      probe_active:  "scripts/probe_active.sh core"
+      set_active:    "scripts/set_active.sh core"
+      probe_passive: "scripts/probe_passive.sh core"
+      set_passive:   "scripts/set_passive.sh core"
+      force_stop:    "scripts/force_stop.sh core"
 ```
-Controller:
-1. собирает management groups внутри cluster group;
-2. исключает failed groups;
-3. выбирает минимальный priority;
-4. всем доступным groups с этим priority выставляет `desired=active`;
-5. остальным выставляет `desired=passive`.
 
-Если несколько groups имеют одинаковый лучший priority — все они становятся active.
+Actor commands accept both string (`"script.sh arg"`) and list (`["script.sh", "arg"]`) YAML forms.
 
-### Mock role runtime
+---
 
-На текущем этапе реальные scripts не вызываются.
+## etcd Key Hierarchy
 
-Mock worker:
-
-1. читает desired своей management group;
-2. ждет 1 секунду;
-3. пишет role actual/health.
-
-Пример:
 ```
-desired=active  -> actual=active, health=ok
-desired=passive -> actual=passive, health=ok
-desired=idle    -> actual=idle, health=warning
-```
-## Реальные actors
-
-В конфигурации уже поддерживается будущая модель:
-```yaml
-actors:
-  probe_active: ./actors/core/probe_active.sh
-  set_active: ./actors/core/set_active.sh
-  probe_passive: ./actors/core/probe_passive.sh
-  set_passive: ./actors/core/set_passive.sh
-  force_stop: ./actors/core/force_stop.sh
+/{cluster_id}/cluster/
+  leadership
+  registry/{node_id}              # node registration (persistent)
+  session/{node_id}               # node liveness (session lease-bound)
+  config/_meta                    # cluster config document
+  config/nodes/{node_id}
+  config/roles/{role_id}
+  config/cluster_groups/{cg}/_meta
+  config/cluster_groups/{cg}/{mg} # management group config (priority, roles)
+  commands/{command_id}           # command queue — producer side implemented
+  commands_history/{command_id}   # archived commands — consumer not yet implemented
+  {cluster_group}/{mg}/desired
+  {cluster_group}/{mg}/actual
+  {cluster_group}/{mg}/health
+  {cluster_group}/{mg}/{node_id}/{role}/actual
+  {cluster_group}/{mg}/{node_id}/{role}/health
 ```
 
-Но на текущем этапе actors не исполняются.
+---
 
-## API 
-### State
-```
-GET /api/v1/state
-```
-Возвращает pretty JSON view.
+## Priority-Based Failover
 
-### Commands
-```
-POST /api/v1/commands
-```
-Создает command key, но обработчик command queue пока не реализован.
+When `failover_mode: automatic` the controller on each reconcile cycle:
+1. Collects all management groups within a cluster group.
+2. Excludes groups with `health=failed` or `actual=failed`.
+3. Finds the lowest `priority` value among available groups.
+4. Sets `desired=active` for all groups at that priority; `desired=passive` for the rest.
 
-## Web UI
-```
-GET /
-```
-Draft UI показывает:
+If multiple groups share the best priority they all become `active` simultaneously.
 
-- cluster groups;
-- management groups;
-- selected management group details;
-- nodes/roles;
-- agent registry;
-- online/offline session status.
+### Controller State Aggregation Rules
 
-Управление через UI пока не реализовано.
+| Role states observed | Group actual | Group health |
+|---|---|---|
+| All active, none passive | `active` | `ok` |
+| All passive, none active | `passive` | `ok` |
+| Mix of active and passive | `failed` | `failed` |
+| Any starting | `starting` | `warning` |
+| Any stopping | `stopping` | `warning` |
+| Any idle (no failed) | `idle` | `warning` |
+| Any failed | `failed` | `failed` |
+| Expected role keys missing | `failed` | `failed` |
 
-## Запуск
+---
+
+## Running
+
 ```bash
 go mod tidy
-go run ./cmd --config config.example.yaml
+
+# Node 1
+go run ./cmd/main.go \
+  --config ./test/testdata/configs/config.node1.yaml \
+  --etcd 10.20.248.77:2379
+
+# Node 2 (separate host)
+go run ./cmd/main.go \
+  --config ./test/testdata/configs/config.node2.yaml \
+  --etcd 10.20.248.77:2379
 ```
-Открыть UI:
+
+`--etcd` is repeatable and overrides `etcd.endpoints` from the config file:
+```bash
+go run ./cmd/main.go --config config.yaml \
+  --etcd 10.20.248.77:2379 \
+  --etcd 10.20.248.78:2379
 ```
-http://localhost:5080/
+
+---
+
+## API
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/state` | Full cluster state as pretty-printed JSON |
+| `GET` | `/api/v1/stream` | Server-Sent Events stream; pushes updated state on every etcd change |
+| `POST` | `/api/v1/commands` | Write a command document to etcd (producer only; consumer not yet implemented) |
+
+All `/api/v1/*` endpoints accept an optional `Authorization: Bearer <token>` header when `api.token` is configured.
+
+### POST /api/v1/commands
+
+```json
+{
+  "type": "set_desired",
+  "cluster_group": "geo_dc",
+  "management_group": "DC1",
+  "desired": "active"
+}
 ```
-Открыть JSON:
-```
-http://localhost:5080/api/v1/state
-```
 
-## Текущий статус реализации
-### Реализовано:
+---
 
-- Go 1.23;
-- единый бинарник;
-- ETCD adapter;
-- one-watch state sync;
-- in-memory StateStore;
-- bootstrap;
-- registry/session;
-- leadership;
-- controller aggregation;
-- priority-based failover;
-- mock role workers;
-- JSON API;
-- draft Web UI.
+## Web UI
 
-### Частично реализовано:
+Available at `http://<node>:5080/`
 
-- command API;
-- actor config model.
+The single-page dashboard connects to `/api/v1/stream` via `EventSource` and updates in real time without page reload. It shows:
+- Cluster metadata and current leader.
+- Cluster groups and management groups with desired/actual/health state.
+- Per-node role states with actor output details.
+- Registry and session status of all connected agents.
 
-### Не реализовано:
+UI-driven commands and config editing are not yet implemented.
 
-- real actor execution;
-- command queue processor;
-- management UI;
-- config UI;
-- SSE live updates;
-- auto failback policy;
-- anti-flapping logic;
+---
+
+## Implementation Status
+
+### Implemented
+- Go binary; single process per node
+- etcd v3 adapter with watch-based state sync
+- In-memory `StateStore` (path-indexed tree)
+- Bootstrap — seeds etcd keys on first start
+- Registry / session lifecycle
+- Leadership election via etcd TTL lease
+- Controller state aggregation
+- Priority-based automatic failover
+- Real actor execution (probe→set convergence loop with timeout and retry)
+- `roles.defaults` — base timeouts/actors shared across roles
+- `actors_base_dir` — configurable base directory for actor paths
+- `--etcd` CLI flag (repeatable, overrides config)
+- JSON API (`/api/v1/state`)
+- SSE live-update stream (`/api/v1/stream`)
+- Command producer API (`/api/v1/commands`)
+- Embedded Web UI with live state
+
+### Partially Implemented
+- Command queue — write side only; leader-side processor not implemented
+- Config watcher — detects etcd config changes but does not propagate to running workers
+
+### Not Implemented
+- Command queue consumer (leader reads `commands/`, executes, archives to `commands_history/`)
+- UI-driven desired state changes
+- Config editor in UI
+- History / diff view in UI
+- Auto failback policy
+- Anti-flapping logic
+- Quorum-aware failover policy

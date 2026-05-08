@@ -1,3 +1,4 @@
+// Package config loads and validates the agent YAML config and merges etcd overrides.
 package config
 
 import (
@@ -123,6 +124,7 @@ type RoleActors map[string]ActorCommand
 // with per-role values taking precedence over defaults (zero value = inherit).
 type RolesMap map[string]RoleConfig
 
+// UnmarshalYAML extracts the optional "defaults" key and applies it as a base to every role entry.
 func (m *RolesMap) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind != yaml.MappingNode {
 		return fmt.Errorf("roles must be a YAML mapping")
@@ -156,6 +158,7 @@ func (m *RolesMap) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
+// applyRoleDefaults fills zero-value fields in role from def (actors map and each timeout individually).
 func applyRoleDefaults(role, def RoleConfig) RoleConfig {
 	if len(role.Actors) == 0 && len(def.Actors) > 0 {
 		actors := make(RoleActors, len(def.Actors))
@@ -372,6 +375,7 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// applyDefaults fills in zero-value config fields with hardcoded defaults before validation.
 func applyDefaults(cfg *Config) {
 	if cfg.Logger.Level == "" {
 		cfg.Logger.Level = "debug"
@@ -453,6 +457,7 @@ func applyDefaults(cfg *Config) {
 	}
 }
 
+// validate checks required fields and cross-reference consistency (memberships → groups → roles).
 func validate(cfg *Config) error {
 	if cfg.Cluster.ID == "" {
 		return errors.New("cluster.id is required")

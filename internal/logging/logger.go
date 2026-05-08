@@ -1,3 +1,4 @@
+// Package logging constructs zap loggers from config and attaches component tags.
 package logging
 
 import (

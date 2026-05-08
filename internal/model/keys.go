@@ -1,4 +1,5 @@
-package keys
+// keys.go defines functions that construct etcd key paths for all domain entities.
+package model
 
 import "path"
 
@@ -54,14 +55,10 @@ func ConfigClusterGroupRoot(clusterID string) string {
 	return path.Join(ConfigRoot(clusterID), "cluster_groups")
 }
 
-// ConfigClusterGroupMeta returns the key for a cluster group's config document.
-// Stored at config/cluster_groups/{group_id}/_meta alongside its management group keys.
 func ConfigClusterGroupMeta(clusterID, groupID string) string {
 	return path.Join(ConfigClusterGroupRoot(clusterID), groupID, "_meta")
 }
 
-// ManagementGroupConfig returns the key for a management group's config document.
-// Stored at config/cluster_groups/{cg}/{mg} so all group-related config is co-located.
 func ManagementGroupConfig(clusterID, clusterGroup, managementGroup string) string {
 	return path.Join(ConfigClusterGroupRoot(clusterID), clusterGroup, managementGroup)
 }
@@ -107,14 +104,14 @@ func RoleHealth(clusterID, clusterGroup, managementGroup, nodeID, role string) s
 	return path.Join(Role(clusterID, clusterGroup, managementGroup, nodeID, role), "health")
 }
 
-func Commands(clusterID string) string {
+func CommandsKey(clusterID string) string {
 	return path.Join(Root(clusterID), "commands")
 }
 
-func Command(clusterID, commandID string) string {
-	return path.Join(Commands(clusterID), commandID)
+func CommandKey(clusterID, commandID string) string {
+	return path.Join(CommandsKey(clusterID), commandID)
 }
 
-func CommandHistory(clusterID, commandID string) string {
+func CommandHistoryKey(clusterID, commandID string) string {
 	return path.Join(Root(clusterID), "commands_history", commandID)
 }

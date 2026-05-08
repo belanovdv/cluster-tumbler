@@ -1,3 +1,4 @@
+// Package roles runs per-role execution workers and actor-based convergence.
 package roles
 
 import (
@@ -9,7 +10,6 @@ import (
 
 	"cluster-tumbler/internal/config"
 	"cluster-tumbler/internal/etcd"
-	"cluster-tumbler/internal/keys"
 	"cluster-tumbler/internal/model"
 	"cluster-tumbler/internal/store"
 
@@ -140,7 +140,7 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) readDesired() (model.DesiredState, bool) {
-	key := keys.Desired(
+	key := model.Desired(
 		w.cfg.Cluster.ID,
 		w.membership.ClusterGroup,
 		w.membership.ManagementGroup,
@@ -164,6 +164,7 @@ func (w *Worker) readDesired() (model.DesiredState, bool) {
 	return doc.State, true
 }
 
+// reconcile decides whether to run desired execution: on desired change or when the check interval elapses.
 func (w *Worker) reconcile(ctx context.Context) error {
 	desired, ok := w.readDesired()
 	if !ok {
@@ -214,6 +215,7 @@ func (w *Worker) reconcile(ctx context.Context) error {
 	return nil
 }
 
+// startDesiredExecution cancels any in-flight execution and starts a new goroutine for the given desired state.
 func (w *Worker) startDesiredExecution(parent context.Context, desired model.DesiredState) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -243,6 +245,7 @@ func (w *Worker) cancelCurrentDesired() {
 	}
 }
 
+// applyDesired waits for a session lease, builds the RoleExecutor, runs Reconcile, and writes the resulting status.
 func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
 	if err := w.waitForSessionLease(ctx); err != nil {
 		w.log.Debug("session lease is not ready, skip role execution", zap.Error(err))
@@ -307,6 +310,7 @@ func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
 	w.writeStatus(ctx, status)
 }
 
+// waitForSessionLease polls until the etcd session lease is available or ctx is cancelled.
 func (w *Worker) waitForSessionLease(ctx context.Context) error {
 	if w.etcd.SessionLeaseID() != 0 {
 		return nil
@@ -328,6 +332,7 @@ func (w *Worker) waitForSessionLease(ctx context.Context) error {
 	}
 }
 
+// writeStatus serialises and writes actual and health documents to etcd under the session lease, skipping unchanged values.
 func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 	leaseID := w.etcd.SessionLeaseID()
 	if leaseID == 0 {
@@ -351,7 +356,7 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		Details:   details,
 	}
 
-	actualKey := keys.RoleActual(
+	actualKey := model.RoleActual(
 		w.cfg.Cluster.ID,
 		w.membership.ClusterGroup,
 		w.membership.ManagementGroup,
@@ -359,7 +364,7 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		w.role,
 	)
 
-	healthKey := keys.RoleHealth(
+	healthKey := model.RoleHealth(
 		w.cfg.Cluster.ID,
 		w.membership.ClusterGroup,
 		w.membership.ManagementGroup,
@@ -445,6 +450,7 @@ func (w *Worker) hasHealthChanged(key string, status model.HealthStatus) bool {
 	return current.Status != status
 }
 
+// toExecutorActors converts config.RoleActors to the executor map, resolving the executable path for each actor.
 func toExecutorActors(src config.RoleActors, cfg *config.Config) map[ActorName][]string {
 	out := make(map[ActorName][]string, len(src))
 

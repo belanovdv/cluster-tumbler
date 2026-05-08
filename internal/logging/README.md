@@ -1,11 +1,5 @@
 # internal/logging
 
-Настройка `zap.Logger`.
+Structured logger construction and component tagging.
 
-Модуль не заменяет zap, а задает:
-- формат;
-- уровень логирования;
-- console/file output;
-- единое поле `component`.
-
-В остальных модулях zap используется напрямую для structured fields.
+Builds a `zap.Logger` from config (level, plain/JSON format, console and/or file output). `WithComponent` attaches a `component` field to a logger instance so log lines from different packages are distinguishable without adding a call-site field everywhere.

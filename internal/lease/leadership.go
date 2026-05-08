@@ -1,4 +1,5 @@
-package leadership
+// leadership.go implements leader election via etcd TTL lease CAS.
+package lease
 
 import (
 	"context"
@@ -7,7 +8,6 @@ import (
 
 	"cluster-tumbler/internal/config"
 	"cluster-tumbler/internal/etcd"
-	"cluster-tumbler/internal/keys"
 	"cluster-tumbler/internal/model"
 
 	"go.uber.org/zap"
@@ -17,15 +17,15 @@ type Event struct {
 	Kind string
 }
 
-type Manager struct {
+type LeadershipManager struct {
 	cfg    *config.Config
 	etcd   *etcd.Client
 	log    *zap.Logger
 	events chan Event
 }
 
-func New(cfg *config.Config, etcdClient *etcd.Client, log *zap.Logger) *Manager {
-	return &Manager{
+func NewLeadership(cfg *config.Config, etcdClient *etcd.Client, log *zap.Logger) *LeadershipManager {
+	return &LeadershipManager{
 		cfg:    cfg,
 		etcd:   etcdClient,
 		log:    log,
@@ -33,11 +33,11 @@ func New(cfg *config.Config, etcdClient *etcd.Client, log *zap.Logger) *Manager 
 	}
 }
 
-func (m *Manager) Events() <-chan Event {
+func (m *LeadershipManager) Events() <-chan Event {
 	return m.events
 }
 
-func (m *Manager) Run(ctx context.Context) error {
+func (m *LeadershipManager) Run(ctx context.Context) error {
 	m.log.Debug("starting leadership manager")
 
 	for {
@@ -53,7 +53,8 @@ func (m *Manager) Run(ctx context.Context) error {
 	}
 }
 
-func (m *Manager) tryLeadership(ctx context.Context) error {
+// tryLeadership grants a lease, attempts CAS acquisition, and runs KeepAlive until the lease is lost.
+func (m *LeadershipManager) tryLeadership(ctx context.Context) error {
 	ttl := int64(m.cfg.Cluster.LeaderTTL.Duration.Seconds())
 	if ttl <= 0 {
 		ttl = 2
@@ -75,7 +76,7 @@ func (m *Manager) tryLeadership(ctx context.Context) error {
 		return err
 	}
 
-	key := keys.Leadership(m.cfg.Cluster.ID)
+	key := model.Leadership(m.cfg.Cluster.ID)
 
 	acquired, err := m.etcd.TryAcquireLeaseKey(ctx, key, data, leaseID)
 	if err != nil {
@@ -83,7 +84,6 @@ func (m *Manager) tryLeadership(ctx context.Context) error {
 	}
 
 	if !acquired {
-		// m.log.Debug("leadership is held by another agent", zap.String("key", key))
 		return nil
 	}
 
@@ -112,7 +112,8 @@ func (m *Manager) tryLeadership(ctx context.Context) error {
 	}
 }
 
-func (m *Manager) emit(event Event) {
+// emit sends an Event to the events channel without blocking; drops and warns if the buffer is full.
+func (m *LeadershipManager) emit(event Event) {
 	select {
 	case m.events <- event:
 	default:

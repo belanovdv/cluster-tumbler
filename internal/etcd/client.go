@@ -1,3 +1,4 @@
+// Package etcd wraps the etcd v3 client with domain-specific helpers.
 package etcd
 
 import (
@@ -68,6 +69,7 @@ func (c *Client) SessionLeaseID() clientv3.LeaseID {
 	return c.sessionLeaseID
 }
 
+// GetPrefix fetches all keys under prefix and returns the map and the current etcd revision.
 func (c *Client) GetPrefix(ctx context.Context, prefix string) (map[string][]byte, int64, error) {
 	c.log.Debug("loading etcd prefix", zap.String("prefix", prefix))
 
@@ -91,6 +93,7 @@ func (c *Client) GetPrefix(ctx context.Context, prefix string) (map[string][]byt
 	return items, resp.Header.Revision, nil
 }
 
+// WatchPrefix returns a channel of store.Event values for all changes under prefix starting at fromRevision.
 func (c *Client) WatchPrefix(ctx context.Context, prefix string, fromRevision int64) <-chan store.Event {
 	out := make(chan store.Event, 128)
 
@@ -185,6 +188,7 @@ func (c *Client) KeepAlive(ctx context.Context, leaseID clientv3.LeaseID) (<-cha
 	return c.cli.KeepAlive(ctx, leaseID)
 }
 
+// TryPutIfAbsent writes key only if it does not exist (create-revision == 0 transaction); returns whether it was created.
 func (c *Client) TryPutIfAbsent(ctx context.Context, key string, value []byte) (bool, error) {
 	c.log.Debug("etcd put-if-absent", zap.String("key", key))
 
@@ -205,6 +209,7 @@ func (c *Client) TryPutIfAbsent(ctx context.Context, key string, value []byte) (
 	return txnResp.Succeeded, nil
 }
 
+// TryAcquireLeaseKey atomically writes key with the given lease only if the key does not exist; used for leader election.
 func (c *Client) TryAcquireLeaseKey(
 	ctx context.Context,
 	key string,

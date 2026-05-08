@@ -1,3 +1,4 @@
+// types.go defines actor names, error types, and request/result/status structs for role execution.
 package roles
 
 import "time"
