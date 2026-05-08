@@ -171,7 +171,7 @@ func (cc *CommandConsumer) execPromote(ctx context.Context, cmd model.Command) e
 		cc.log.Debug("promote: group already has highest priority",
 			zap.String("management_group", cmd.ManagementGroup),
 		)
-		return cc.activateTarget(ctx, cmd.ClusterGroup, cmd.ManagementGroup)
+		return cc.writeDesiredIfIdle(ctx, cmd.ClusterGroup, cmd.ManagementGroup)
 	}
 
 	// Swap: target gets minPri, current top gets targetPri.
@@ -182,12 +182,10 @@ func (cc *CommandConsumer) execPromote(ctx context.Context, cmd model.Command) e
 		return fmt.Errorf("writing priority for %s: %w", minGroup, err)
 	}
 
-	// Bring the target into the controller's field of view.
-	// When no group is currently active, write desired=active directly so the cold-start
-	// guard in the controller lets Phase 2 proceed. Otherwise write desired=passive so the
-	// controller handles the two-phase switchover.
-	if err := cc.activateTarget(ctx, cmd.ClusterGroup, cmd.ManagementGroup); err != nil {
-		return fmt.Errorf("activating target %s: %w", cmd.ManagementGroup, err)
+	// Bring the target out of idle so the controller can pick it up as a candidate.
+	// The controller applies two-phase activation on the next reconcile.
+	if err := cc.writeDesiredIfIdle(ctx, cmd.ClusterGroup, cmd.ManagementGroup); err != nil {
+		return fmt.Errorf("clearing idle on %s: %w", cmd.ManagementGroup, err)
 	}
 
 	cc.log.Info("promote: priorities swapped",
@@ -205,36 +203,6 @@ func (cc *CommandConsumer) execDisable(ctx context.Context, cmd model.Command) e
 // execReload clears the failed state by writing desired=passive, triggering a fresh passive convergence attempt.
 func (cc *CommandConsumer) execReload(ctx context.Context, cmd model.Command) error {
 	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive)
-}
-
-// activateTarget decides how to bring a management group into active candidacy.
-// When no group currently holds desired=active (cold-start), it writes desired=active directly
-// so the controller's cold-start guard allows Phase 2 to proceed. Otherwise it writes
-// desired=passive via writeDesiredIfIdle so the controller performs a two-phase switchover.
-func (cc *CommandConsumer) activateTarget(ctx context.Context, clusterGroup, managementGroup string) error {
-	if cc.hasNoActiveGroup(clusterGroup) {
-		return cc.writeDesired(ctx, clusterGroup, managementGroup, model.DesiredActive)
-	}
-	return cc.writeDesiredIfIdle(ctx, clusterGroup, managementGroup)
-}
-
-// hasNoActiveGroup returns true when no management group in the given cluster group has desired=active.
-func (cc *CommandConsumer) hasNoActiveGroup(clusterGroup string) bool {
-	children := cc.store.ListChildren(model.ClusterGroup(cc.clusterID, clusterGroup))
-	for _, mg := range children {
-		raw, ok := cc.store.Get(model.Desired(cc.clusterID, clusterGroup, mg))
-		if !ok {
-			continue
-		}
-		var doc model.DesiredDocument
-		if err := json.Unmarshal(raw, &doc); err != nil {
-			continue
-		}
-		if doc.State == model.DesiredActive {
-			return false
-		}
-	}
-	return true
 }
 
 // writeDesiredIfIdle writes desired=passive only when the current desired state is idle.

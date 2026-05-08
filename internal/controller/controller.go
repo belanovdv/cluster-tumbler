@@ -477,12 +477,23 @@ func (c *Controller) applyPriorityPolicy(
 		return nil
 	}
 
-	// Determine which group currently holds desired=active.
+	// Determine which group currently holds active ownership.
+	// Primary signal: desired=active. Secondary: desired=passive but actual is still
+	// active/stopping — the group is mid-draining (Phase 1 already wrote desired=passive).
 	currentActive := ""
 	for _, g := range groups {
 		if g.Desired == model.DesiredActive {
 			currentActive = g.ManagementGroup
 			break
+		}
+	}
+	if currentActive == "" {
+		for _, g := range groups {
+			if g.Desired == model.DesiredPassive &&
+				(g.Actual == model.ActualActive || g.Actual == model.ActualStopping || g.Actual == model.ActualStarting) {
+				currentActive = g.ManagementGroup
+				break
+			}
 		}
 	}
 
@@ -539,13 +550,6 @@ func (c *Controller) applyPriorityPolicy(
 	}
 
 	// Phase 2: activate target group.
-	// Cold-start guard: if no group currently holds desired=active and the target was not
-	// explicitly promoted (desired=active), do not auto-activate — this prevents the controller
-	// from turning a passive group active when the previous active was intentionally set to idle.
-	if currentActive == "" && target.Desired != model.DesiredActive {
-		return nil
-	}
-
 	if err := c.writeDesiredIfChanged(ctx, target.ClusterGroup, target.ManagementGroup, model.DesiredActive); err != nil {
 		return err
 	}
