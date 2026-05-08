@@ -6,15 +6,13 @@ import (
 
 	"cluster-tumbler/internal/api"
 	"cluster-tumbler/internal/bootstrap"
-	"cluster-tumbler/internal/cfgwatch"
 	"cluster-tumbler/internal/config"
 	"cluster-tumbler/internal/controller"
 	"cluster-tumbler/internal/etcd"
-	"cluster-tumbler/internal/keys"
-	"cluster-tumbler/internal/leadership"
+	"cluster-tumbler/internal/lease"
 	"cluster-tumbler/internal/logging"
+	"cluster-tumbler/internal/model"
 	"cluster-tumbler/internal/roles"
-	"cluster-tumbler/internal/session"
 	"cluster-tumbler/internal/store"
 
 	"go.uber.org/zap"
@@ -29,9 +27,9 @@ type Runtime struct {
 
 	api        *api.Server
 	bootstrap  *bootstrap.Bootstrapper
-	cfgwatch   *cfgwatch.Watcher
-	session    *session.Manager
-	leader     *leadership.Manager
+	cfgwatch   *config.Watcher
+	session    *lease.SessionManager
+	leader     *lease.LeadershipManager
 	controller *controller.Controller
 	roles      *roles.Manager
 }
@@ -78,17 +76,17 @@ func New(cfg *config.Config) (*Runtime, error) {
 			etcdClient,
 			logging.WithComponent(baseLogger, "bootstrap"),
 		),
-		cfgwatch: cfgwatch.New(
+		cfgwatch: config.NewWatcher(
 			cfg,
 			etcdClient,
 			logging.WithComponent(baseLogger, "cfgwatch"),
 		),
-		session: session.New(
+		session: lease.NewSession(
 			cfg,
 			etcdClient,
 			logging.WithComponent(baseLogger, "session"),
 		),
-		leader: leadership.New(
+		leader: lease.NewLeadership(
 			cfg,
 			etcdClient,
 			logging.WithComponent(baseLogger, "leadership"),
@@ -122,7 +120,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 	}
 	defer r.etcdClient.Close()
 
-	root := keys.Root(r.cfg.Cluster.ID)
+	root := model.Root(r.cfg.Cluster.ID)
 
 	items, revision, err := r.etcdClient.GetPrefix(ctx, root)
 	if err != nil {
@@ -182,7 +180,7 @@ func (r *Runtime) connectETCD(ctx context.Context) error {
 		r.log.Debug("checking etcd connectivity")
 
 		checkCtx, cancel := context.WithTimeout(ctx, r.cfg.Etcd.DialTimeout.Duration)
-		_, _, err := r.etcdClient.GetPrefix(checkCtx, keys.Root(r.cfg.Cluster.ID))
+		_, _, err := r.etcdClient.GetPrefix(checkCtx, model.Root(r.cfg.Cluster.ID))
 		cancel()
 
 		if err == nil {

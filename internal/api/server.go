@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"cluster-tumbler/internal/keys"
 	"cluster-tumbler/internal/model"
 	"cluster-tumbler/internal/store"
 	"cluster-tumbler/internal/web"
@@ -186,7 +185,7 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := keys.Command(s.clusterID, cmd.ID)
+	key := model.CommandKey(s.clusterID, cmd.ID)
 
 	if s.putter == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)

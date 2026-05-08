@@ -1,4 +1,4 @@
-package session
+package lease
 
 import (
 	"context"
@@ -7,27 +7,26 @@ import (
 
 	"cluster-tumbler/internal/config"
 	"cluster-tumbler/internal/etcd"
-	"cluster-tumbler/internal/keys"
 	"cluster-tumbler/internal/model"
 
 	"go.uber.org/zap"
 )
 
-type Manager struct {
+type SessionManager struct {
 	cfg  *config.Config
 	etcd *etcd.Client
 	log  *zap.Logger
 }
 
-func New(cfg *config.Config, etcdClient *etcd.Client, log *zap.Logger) *Manager {
-	return &Manager{
+func NewSession(cfg *config.Config, etcdClient *etcd.Client, log *zap.Logger) *SessionManager {
+	return &SessionManager{
 		cfg:  cfg,
 		etcd: etcdClient,
 		log:  log,
 	}
 }
 
-func (m *Manager) Run(ctx context.Context) error {
+func (m *SessionManager) Run(ctx context.Context) error {
 	m.log.Debug("starting session manager")
 
 	ttl := int64(m.cfg.Cluster.SessionTTL.Duration.Seconds())
@@ -67,7 +66,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		return err
 	}
 
-	registrationKey := keys.Registry(m.cfg.Cluster.ID, m.cfg.Node.NodeID)
+	registrationKey := model.Registry(m.cfg.Cluster.ID, m.cfg.Node.NodeID)
 
 	m.log.Debug("writing global registration", zap.String("key", registrationKey))
 
@@ -85,7 +84,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		return err
 	}
 
-	sessionKey := keys.Session(m.cfg.Cluster.ID, m.cfg.Node.NodeID)
+	sessionKey := model.Session(m.cfg.Cluster.ID, m.cfg.Node.NodeID)
 
 	m.log.Debug(
 		"writing global session",

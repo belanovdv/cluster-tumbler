@@ -7,7 +7,6 @@ import (
 
 	"cluster-tumbler/internal/config"
 	"cluster-tumbler/internal/etcd"
-	"cluster-tumbler/internal/keys"
 	"cluster-tumbler/internal/model"
 
 	"go.uber.org/zap"
@@ -65,7 +64,7 @@ func (b *Bootstrapper) Ensure(ctx context.Context) error {
 // Uses TryPutIfAbsent so only the first node to start writes the value;
 // subsequent changes are made by the leader via API.
 func (b *Bootstrapper) ensureClusterConfig(ctx context.Context) error {
-	key := keys.ConfigMeta(b.cfg.Cluster.ID)
+	key := model.ConfigMeta(b.cfg.Cluster.ID)
 
 	doc := model.ClusterConfigDocument{
 		ID:                  b.cfg.Cluster.ID,
@@ -96,7 +95,7 @@ func (b *Bootstrapper) ensureClusterConfig(ctx context.Context) error {
 
 // ensureClusterGroup seeds display config for a cluster group.
 func (b *Bootstrapper) ensureClusterGroup(ctx context.Context, groupID string, groupCfg config.ClusterGroupConfig) error {
-	key := keys.ConfigClusterGroupMeta(b.cfg.Cluster.ID, groupID)
+	key := model.ConfigClusterGroupMeta(b.cfg.Cluster.ID, groupID)
 
 	doc := model.ClusterGroupConfigDocument{
 		ID:        groupID,
@@ -124,7 +123,7 @@ func (b *Bootstrapper) ensureClusterGroup(ctx context.Context, groupID string, g
 // ensureRole seeds the full role definition (actors + timeouts) to config/roles/{id}.
 // Uses TryPutIfAbsent — first node wins; leader can override via API.
 func (b *Bootstrapper) ensureRole(ctx context.Context, roleID string, roleCfg config.RoleConfig) error {
-	key := keys.ConfigRole(b.cfg.Cluster.ID, roleID)
+	key := model.ConfigRole(b.cfg.Cluster.ID, roleID)
 
 	actors := make(map[string][]string, len(roleCfg.Actors))
 	for name, cmd := range roleCfg.Actors {
@@ -166,7 +165,7 @@ func (b *Bootstrapper) ensureRole(ctx context.Context, roleID string, roleCfg co
 // Uses Put (not TryPutIfAbsent) so that name/membership changes in the
 // local config file are reflected on restart.
 func (b *Bootstrapper) ensureNode(ctx context.Context) error {
-	key := keys.ConfigNode(b.cfg.Cluster.ID, b.cfg.Node.NodeID)
+	key := model.ConfigNode(b.cfg.Cluster.ID, b.cfg.Node.NodeID)
 
 	memberships := make([]model.MembershipRef, len(b.cfg.Node.Memberships))
 	for i, m := range b.cfg.Node.Memberships {
@@ -214,7 +213,7 @@ func (b *Bootstrapper) ensureMembership(ctx context.Context, membership config.M
 		return err
 	}
 
-	configKey := keys.ManagementGroupConfig(
+	configKey := model.ManagementGroupConfig(
 		b.cfg.Cluster.ID,
 		membership.ClusterGroup,
 		membership.ManagementGroup,
@@ -240,7 +239,7 @@ func (b *Bootstrapper) ensureMembership(ctx context.Context, membership config.M
 		return err
 	}
 
-	desiredKey := keys.Desired(
+	desiredKey := model.Desired(
 		b.cfg.Cluster.ID,
 		membership.ClusterGroup,
 		membership.ManagementGroup,

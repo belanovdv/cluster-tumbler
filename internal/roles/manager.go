@@ -9,7 +9,6 @@ import (
 
 	"cluster-tumbler/internal/config"
 	"cluster-tumbler/internal/etcd"
-	"cluster-tumbler/internal/keys"
 	"cluster-tumbler/internal/model"
 	"cluster-tumbler/internal/store"
 
@@ -140,7 +139,7 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) readDesired() (model.DesiredState, bool) {
-	key := keys.Desired(
+	key := model.Desired(
 		w.cfg.Cluster.ID,
 		w.membership.ClusterGroup,
 		w.membership.ManagementGroup,
@@ -351,7 +350,7 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		Details:   details,
 	}
 
-	actualKey := keys.RoleActual(
+	actualKey := model.RoleActual(
 		w.cfg.Cluster.ID,
 		w.membership.ClusterGroup,
 		w.membership.ManagementGroup,
@@ -359,7 +358,7 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		w.role,
 	)
 
-	healthKey := keys.RoleHealth(
+	healthKey := model.RoleHealth(
 		w.cfg.Cluster.ID,
 		w.membership.ClusterGroup,
 		w.membership.ManagementGroup,
