@@ -1,3 +1,4 @@
+// Package lease manages etcd leases for node session presence and cluster leadership.
 package lease
 
 import (

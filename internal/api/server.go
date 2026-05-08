@@ -1,3 +1,4 @@
+// Package api implements the HTTP API server and SSE state stream.
 package api
 
 import (
@@ -39,6 +40,7 @@ func New(addr string, clusterID string, token string, st *store.StateStore, putt
 	}
 }
 
+// requireAuth wraps a handler with Bearer token validation; passes through if token is unconfigured.
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	if s.token == "" {
 		return next
@@ -89,6 +91,7 @@ func (s *Server) Run(ctx context.Context) error {
 	return nil
 }
 
+// handleStream is the SSE entry point; sends an initial snapshot then one event per store change.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -128,6 +131,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleState returns the current cluster state as a pretty-printed JSON snapshot.
 func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -146,6 +150,8 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
+// handleCommands is the producer side of the command queue: writes a Command document to etcd and returns its ID.
+// The consumer (leader queue processor) is not yet implemented.
 func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)

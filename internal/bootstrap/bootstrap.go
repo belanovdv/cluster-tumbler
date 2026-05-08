@@ -1,3 +1,4 @@
+// Package bootstrap seeds initial etcd keys on agent startup.
 package bootstrap
 
 import (
@@ -26,6 +27,7 @@ func New(cfg *config.Config, etcdClient *etcd.Client, log *zap.Logger) *Bootstra
 	}
 }
 
+// Ensure is the entry point for one-shot etcd seeding; runs all ensure* steps in order.
 func (b *Bootstrapper) Ensure(ctx context.Context) error {
 	b.log.Debug("starting bootstrap ensure")
 

@@ -1,3 +1,4 @@
+// converge.go implements the probe→set convergence loop used by RoleExecutor.
 package roles
 
 import (
@@ -5,6 +6,7 @@ import (
 	"time"
 )
 
+// ensure is the main convergence loop: probe → (notify transition) → set, retrying until success or converge timeout.
 func (e *RoleExecutor) ensure(
 	ctx context.Context,
 	req RoleRequest,

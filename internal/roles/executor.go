@@ -1,3 +1,4 @@
+// executor.go defines RoleExecutor and dispatches desired state to convergence helpers.
 package roles
 
 import (
@@ -38,6 +39,7 @@ func (e *RoleExecutor) build(req RoleRequest, name ActorName, cmd []string) Acto
 	}
 }
 
+// forceStop runs the force_stop actor to gracefully terminate the role during passive convergence timeout.
 func (e *RoleExecutor) forceStop(ctx context.Context, req RoleRequest) RoleStatus {
 	cmd, ok := e.Actors[ForceStop]
 	if !ok {
@@ -57,6 +59,7 @@ func (e *RoleExecutor) forceStop(ctx context.Context, req RoleRequest) RoleStatu
 	return failedActor(res)
 }
 
+// Reconcile is the entry point for role convergence; dispatches to ensure (active/passive) or returns idle status.
 func (e *RoleExecutor) Reconcile(ctx context.Context, req RoleRequest, onTransition func(RoleStatus)) RoleStatus {
 	switch req.Desired {
 	case "active":

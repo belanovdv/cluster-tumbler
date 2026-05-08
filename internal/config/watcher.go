@@ -1,3 +1,4 @@
+// watcher.go watches the config prefix in etcd and rebuilds the config snapshot on change.
 package config
 
 import (
@@ -47,6 +48,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 	}
 }
 
+// onConfigChanged reloads the full config snapshot from etcd when any config key changes.
 func (w *Watcher) onConfigChanged(ctx context.Context, changedKey string) {
 	snap, err := w.loadSnapshot(ctx)
 	if err != nil {
@@ -64,6 +66,7 @@ func (w *Watcher) onConfigChanged(ctx context.Context, changedKey string) {
 	)
 }
 
+// loadSnapshot bulk-reads the config prefix from etcd and categorises keys into EtcdSnapshot.
 func (w *Watcher) loadSnapshot(ctx context.Context) (*EtcdSnapshot, error) {
 	prefix := model.ConfigRoot(w.cfg.Cluster.ID)
 

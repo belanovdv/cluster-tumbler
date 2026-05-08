@@ -1,3 +1,4 @@
+// Package model defines domain types and etcd key path functions.
 package model
 
 import "time"
@@ -77,6 +78,9 @@ type LeadershipDocument struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// CommandStatus tracks processing stages for a queued command.
+// Producer (API) writes Pending; consumer (leader controller) advances the lifecycle.
+// The consumer is not yet implemented.
 type CommandStatus string
 
 const (
@@ -86,6 +90,9 @@ const (
 	CommandFailed    CommandStatus = "failed"
 )
 
+// Command is the document written to commands/{id} by any node via POST /api/v1/commands.
+// The leader is expected to read this queue, apply the requested desired-state change, and
+// archive the document to commands_history/{id}. Queue processing is not yet implemented.
 type Command struct {
 	ID              string        `json:"id"`
 	Type            string        `json:"type"`

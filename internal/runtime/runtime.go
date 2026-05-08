@@ -1,3 +1,4 @@
+// Package runtime wires all agent packages together and manages the agent lifecycle.
 package runtime
 
 import (
@@ -169,6 +170,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 	return ctx.Err()
 }
 
+// connectETCD retries etcd connectivity with the configured retry interval until reachable or ctx is cancelled.
 func (r *Runtime) connectETCD(ctx context.Context) error {
 	for {
 		select {
@@ -198,6 +200,7 @@ func (r *Runtime) connectETCD(ctx context.Context) error {
 	}
 }
 
+// watchLoop fans etcd watch events into the state store; the store notifies the SSE handler on each apply.
 func (r *Runtime) watchLoop(ctx context.Context, prefix string, fromRevision int64) {
 	events := r.etcdClient.WatchPrefix(ctx, prefix, fromRevision)
 
@@ -220,6 +223,7 @@ func (r *Runtime) watchLoop(ctx context.Context, prefix string, fromRevision int
 	}
 }
 
+// controllerWhenLeader starts the controller goroutine each time a leadership "acquired" event is received.
 func (r *Runtime) controllerWhenLeader(ctx context.Context) {
 	for {
 		select {

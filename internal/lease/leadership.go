@@ -1,3 +1,4 @@
+// leadership.go implements leader election via etcd TTL lease CAS.
 package lease
 
 import (
@@ -52,6 +53,7 @@ func (m *LeadershipManager) Run(ctx context.Context) error {
 	}
 }
 
+// tryLeadership grants a lease, attempts CAS acquisition, and runs KeepAlive until the lease is lost.
 func (m *LeadershipManager) tryLeadership(ctx context.Context) error {
 	ttl := int64(m.cfg.Cluster.LeaderTTL.Duration.Seconds())
 	if ttl <= 0 {
@@ -110,6 +112,7 @@ func (m *LeadershipManager) tryLeadership(ctx context.Context) error {
 	}
 }
 
+// emit sends an Event to the events channel without blocking; drops and warns if the buffer is full.
 func (m *LeadershipManager) emit(event Event) {
 	select {
 	case m.events <- event:

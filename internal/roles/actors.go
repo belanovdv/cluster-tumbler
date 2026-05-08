@@ -1,3 +1,4 @@
+// actors.go executes role actor subprocesses and classifies their exit conditions.
 package roles
 
 import (

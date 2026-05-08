@@ -1,3 +1,4 @@
+// keys.go defines functions that construct etcd key paths for all domain entities.
 package model
 
 import "path"

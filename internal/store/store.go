@@ -1,3 +1,4 @@
+// Package store is an in-memory cache of etcd state modelled as a path-indexed tree.
 package store
 
 import (
@@ -60,6 +61,7 @@ func (s *StateStore) sendNotify() {
 	}
 }
 
+// LoadSnapshot replaces the entire tree with a bulk-read etcd snapshot and marks the store as ready.
 func (s *StateStore) LoadSnapshot(items map[string][]byte, revision int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -83,6 +85,7 @@ func (s *StateStore) LoadSnapshot(items map[string][]byte, revision int64) error
 	return nil
 }
 
+// Apply applies a single put or delete event from the etcd watch stream to the in-memory tree.
 func (s *StateStore) Apply(event Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -107,6 +110,7 @@ func (s *StateStore) Apply(event Event) error {
 	return nil
 }
 
+// Snapshot returns a deep copy of the current tree; safe to read concurrently with ongoing Apply calls.
 func (s *StateStore) Snapshot() *TreeNode {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

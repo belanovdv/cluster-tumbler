@@ -1,3 +1,4 @@
+// view.go builds the StateView JSON hierarchy from the in-memory store tree.
 package api
 
 import (
@@ -53,6 +54,7 @@ type RoleView struct {
 	Health json.RawMessage `json:"health,omitempty"`
 }
 
+// BuildStateView is the entry point for rendering the store tree into a StateView for API responses.
 func BuildStateView(clusterID string, ready bool, revision int64, root *store.TreeNode) StateView {
 	view := StateView{
 		Ready:    ready,
@@ -112,6 +114,7 @@ type viewMeta struct {
 	roleNames   map[string]string
 }
 
+// buildViewMeta reads display names (cluster, groups, nodes, roles) from the config subtree.
 func buildViewMeta(configRoot *store.TreeNode) viewMeta {
 	m := viewMeta{
 		groupNames: make(map[string]string),
@@ -258,6 +261,7 @@ func buildClusterGroup(
 	return out
 }
 
+// buildManagementGroup assembles a ManagementGroupView; also discovers node containers inside the group.
 func buildManagementGroup(
 	managementGroupID string,
 	managementGroupNode *store.TreeNode,
@@ -338,6 +342,7 @@ func buildNode(nodeID string, node *store.TreeNode, meta viewMeta) *NodeView {
 	return out
 }
 
+// ensureDetails normalises an actual/health JSON object to always include a "details" field.
 func ensureDetails(raw json.RawMessage) json.RawMessage {
 	if raw == nil {
 		return nil
@@ -360,6 +365,7 @@ func ensureDetails(raw json.RawMessage) json.RawMessage {
 	return out
 }
 
+// looksLikeRoleContainer returns true if any child of node has an actual or health sub-key.
 func looksLikeRoleContainer(node *store.TreeNode) bool {
 	if node == nil {
 		return false

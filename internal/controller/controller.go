@@ -1,3 +1,4 @@
+// Package controller implements the leader-only reconciliation loop for cluster state.
 package controller
 
 import (
@@ -75,6 +76,7 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 }
 
+// Reconcile is the entry point for one reconciliation cycle: iterates every management group and applies policy.
 func (c *Controller) Reconcile(ctx context.Context) error {
 	if !c.store.Ready() {
 		c.log.Debug("state store is not ready, skip reconcile")
@@ -130,6 +132,7 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 	return nil
 }
 
+// reconcileManagementGroup aggregates per-role actual/health into a group-level state and writes if changed.
 func (c *Controller) reconcileManagementGroup(
 	ctx context.Context,
 	clusterGroup string,
@@ -339,6 +342,7 @@ func (c *Controller) readDesired(clusterGroup string, managementGroup string) mo
 	return doc.State
 }
 
+// missingExpectedRoleStates returns keys for roles that should have actual/health but do not (agent lost).
 func (c *Controller) missingExpectedRoleStates(
 	clusterGroup string,
 	managementGroup string,
@@ -383,6 +387,7 @@ func (c *Controller) missingExpectedRoleStates(
 	return missing
 }
 
+// expectedRoleStates builds the list of (node, role) pairs expected in a group from the registry.
 func (c *Controller) expectedRoleStates(
 	clusterGroup string,
 	managementGroup string,
@@ -431,6 +436,7 @@ func (c *Controller) expectedRoleStates(
 	return out
 }
 
+// applyPriorityPolicy selects the lowest-priority available group as active; sets all others to passive.
 func (c *Controller) applyPriorityPolicy(
 	ctx context.Context,
 	clusterGroup string,
@@ -527,6 +533,7 @@ func (c *Controller) readPriority(clusterGroup string, managementGroup string) i
 	return doc.Priority
 }
 
+// buildActualIfChanged serialises a new ActualDocument only when state or details differ from the stored value.
 func (c *Controller) buildActualIfChanged(
 	key string,
 	state model.ActualState,
@@ -561,6 +568,7 @@ func (c *Controller) buildActualIfChanged(
 	return true, data, nil
 }
 
+// buildHealthIfChanged serialises a new HealthDocument only when status or details differ from the stored value.
 func (c *Controller) buildHealthIfChanged(
 	key string,
 	status model.HealthStatus,
