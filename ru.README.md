@@ -102,10 +102,10 @@ api:
 
 cluster:
   id: my_cluster
-  name: "Мой кластер"
+  name: "My Cluster"
   groups:
     geo_dc:
-      name: "Географический DC"
+      name: "Geographic DC"
   failover_mode: manual   # или: automatic
   leader_ttl: 2s
   leader_renew_interval: 500ms
@@ -113,7 +113,7 @@ cluster:
 
 node:
   node_id: node1
-  name: "Узел 1"
+  name: "Node 1"
   actors_base_dir: "."    # базовая директория для относительных путей к акторам
 
   memberships:
@@ -138,7 +138,7 @@ roles:
       details_max_size: 4096
 
   core:
-    name: "Core Service"
+    name: "Core"
     actors:
       probe_active:  "scripts/probe_active.sh core"
       set_active:    "scripts/set_active.sh core"
