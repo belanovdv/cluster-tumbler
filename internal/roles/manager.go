@@ -384,11 +384,7 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		}
 
 		if err := w.etcd.PutWithLease(ctx, actualKey, actualData, leaseID); err != nil {
-			w.log.Error(
-				"failed to write actual",
-				zap.String("key", actualKey),
-				zap.Error(err),
-			)
+			logEtcdWriteError(w.log, "failed to write actual", actualKey, err)
 			return
 		}
 	}
@@ -401,11 +397,7 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		}
 
 		if err := w.etcd.PutWithLease(ctx, healthKey, healthData, leaseID); err != nil {
-			w.log.Error(
-				"failed to write health",
-				zap.String("key", healthKey),
-				zap.Error(err),
-			)
+			logEtcdWriteError(w.log, "failed to write health", healthKey, err)
 			return
 		}
 	}
@@ -484,6 +476,14 @@ func toHealthStatus(status string) model.HealthStatus {
 	default:
 		return model.HealthFailed
 	}
+}
+
+func logEtcdWriteError(log *zap.Logger, msg, key string, err error) {
+	if err == context.Canceled {
+		log.Debug(msg, zap.String("key", key), zap.Error(err))
+		return
+	}
+	log.Error(msg, zap.String("key", key), zap.Error(err))
 }
 
 func detailsToString(details map[string]any) string {

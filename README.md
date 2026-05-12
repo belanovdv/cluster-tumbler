@@ -261,17 +261,17 @@ Three command types are supported:
 
 ```bash
 # Promote DC2 to highest priority (failover)
-curl -X POST http://node1:5080/api/v1/commands \
+curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"promote","cluster_group":"geo_dc","management_group":"DC2"}'
 
 # Take DC1 out of rotation (maintenance)
-curl -X POST http://node1:5080/api/v1/commands \
+curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"disable","cluster_group":"geo_dc","management_group":"DC1"}'
 
 # Reset DC1 after failure investigation
-curl -X POST http://node1:5080/api/v1/commands \
+curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"reload","cluster_group":"geo_dc","management_group":"DC1"}'
 ```

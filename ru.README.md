@@ -261,17 +261,17 @@ go run ./cmd/main.go --config config.yaml \
 
 ```bash
 # Продвинуть DC2 на высший приоритет (failover)
-curl -X POST http://node1:5080/api/v1/commands \
+curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"promote","cluster_group":"geo_dc","management_group":"DC2"}'
 
 # Вывести DC1 на обслуживание
-curl -X POST http://node1:5080/api/v1/commands \
+curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"disable","cluster_group":"geo_dc","management_group":"DC1"}'
 
 # Сбросить DC1 после устранения неисправности
-curl -X POST http://node1:5080/api/v1/commands \
+curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"reload","cluster_group":"geo_dc","management_group":"DC1"}'
 ```
