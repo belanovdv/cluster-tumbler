@@ -1,4 +1,4 @@
-// executor.go defines RoleExecutor and dispatches desired state to convergence helpers.
+// executor.go defines RoleExecutor and dispatches desired state to convergence (Reconcile) or probe-only mode (ReconcileDisabled).
 package roles
 
 import (

@@ -1,4 +1,4 @@
-// commands.go implements the leader-side command consumer that reads from commands/ and executes them.
+// commands.go implements the leader-side command consumer: reads commands/ queue and executes promote, disable, reload, and force_passive.
 package controller
 
 import (
