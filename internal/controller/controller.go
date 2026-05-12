@@ -28,6 +28,7 @@ type Controller struct {
 	lastManagementGroups map[string][]string
 	switchoverStarted    map[string]time.Time  // key: "clusterGroup/mgName" → when phase-1 began
 	switchoverTarget     map[string]string     // key: clusterGroup → target MG that phase-1 was initiated for
+	lastMissing          map[string][]string   // key: "clusterGroup/mgName" → last reported missing role keys
 }
 
 type groupRuntime struct {
@@ -55,6 +56,7 @@ func New(cfg *config.Config, st *store.StateStore, etcdClient *etcd.Client, log 
 		lastManagementGroups: make(map[string][]string),
 		switchoverStarted:    make(map[string]time.Time),
 		switchoverTarget:     make(map[string]string),
+		lastMissing:          make(map[string][]string),
 	}
 }
 
@@ -165,17 +167,23 @@ func (c *Controller) reconcileManagementGroup(
 
 	if managed {
 		missing := c.missingExpectedRoleStates(clusterGroup, managementGroup)
+		missingKey := clusterGroup + "/" + managementGroup
 		if len(missing) > 0 {
 			actualState = model.ActualFailed
 			healthStatus = model.HealthFailed
 			details = "agent lost"
 
-			c.log.Debug(
-				"detected missing expected role state",
-				zap.String("cluster_group", clusterGroup),
-				zap.String("management_group", managementGroup),
-				zap.Strings("missing", missing),
-			)
+			if !reflect.DeepEqual(c.lastMissing[missingKey], missing) {
+				c.log.Debug(
+					"detected missing expected role state",
+					zap.String("cluster_group", clusterGroup),
+					zap.String("management_group", managementGroup),
+					zap.Strings("missing", missing),
+				)
+				c.lastMissing[missingKey] = append([]string(nil), missing...)
+			}
+		} else if _, had := c.lastMissing[missingKey]; had {
+			delete(c.lastMissing, missingKey)
 		}
 	}
 
