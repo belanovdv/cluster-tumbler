@@ -312,5 +312,9 @@ func (cc *CommandConsumer) archiveCommand(ctx context.Context, cmd model.Command
 	}
 	if err := cc.etcd.Put(ctx, model.CommandHistoryKey(cc.clusterID, cmd.ID), data); err != nil {
 		cc.log.Error("failed to archive command", zap.Error(err))
+		return
+	}
+	if err := cc.etcd.Delete(ctx, model.CommandKey(cc.clusterID, cmd.ID)); err != nil {
+		cc.log.Error("failed to delete command from queue", zap.String("id", cmd.ID), zap.Error(err))
 	}
 }
