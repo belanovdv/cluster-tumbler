@@ -1,0 +1,35 @@
+# Binaries and build output
+/bin/
+/dist/
+*.exe
+*.out
+
+# Go test and coverage
+*.test
+coverage.out
+coverage.html
+
+# Environment and secrets
+.env
+.env.*
+*.env
+
+# IDE — VS Code (tasks.json is tracked; everything else is local)
+.vscode/*
+!.vscode/tasks.json
+
+# IDE — JetBrains
+.idea/
+*.iml
+
+# OS artefacts
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+*~
