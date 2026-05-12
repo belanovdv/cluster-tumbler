@@ -230,6 +230,11 @@ body {
 .health-warning { background:var(--warning); }
 .health-failed { background:var(--failed); }
 
+.disabled-control .badge {
+  background:var(--idle);
+  color:var(--muted);
+}
+
 .details-title {
   font-size:21px;
   font-weight:700;
@@ -510,7 +515,8 @@ function renderGroups() {
       const mg = mgs[mgName];
       const isSelected = selected && selected.groupName === groupName && selected.mgName === mgName;
 
-      html += '<div class="mg-item ' + (isSelected ? 'selected' : '') + '" onclick="selectMG(\'' + escapeHtml(groupName) + '\', \'' + escapeHtml(mgName) + '\')">';
+      const disableCtrl = mg.desired && mg.desired.disable_control;
+      html += '<div class="mg-item' + (isSelected ? ' selected' : '') + (disableCtrl ? ' disabled-control' : '') + '" onclick="selectMG(\'' + escapeHtml(groupName) + '\', \'' + escapeHtml(mgName) + '\')">';
       html += '<div class="mg-name">' + titleWithID(mg, mgName) + '</div>';
       html += '<div class="badges">';
       html += badge("desired", docState(mg.desired), "state");
@@ -543,8 +549,10 @@ function renderDetails() {
 
   const group = state.cluster.groups[selected.groupName];
   const mg = group.management_groups[selected.mgName];
+  const detailsDisableCtrl = mg.desired && mg.desired.disable_control;
 
-  let html = '<div class="details-title">' +
+  let html = '<div' + (detailsDisableCtrl ? ' class="disabled-control"' : '') + '>';
+  html += '<div class="details-title">' +
 	    titleWithID(group, selected.groupName) +
 	    ' / ' +
 	    titleWithID(mg, selected.mgName) +
@@ -596,7 +604,8 @@ function renderDetails() {
     html += '</div>';
   }
 
-  html += '</div>';
+  html += '</div>'; // section nodes/roles
+  html += '</div>'; // disabled-control wrapper
 
   el.innerHTML = html;
 }

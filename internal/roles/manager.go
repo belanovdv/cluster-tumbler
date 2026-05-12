@@ -92,9 +92,10 @@ type Worker struct {
 	etcd       *etcd.Client
 	log        *zap.Logger
 
-	lastDesired model.DesiredState
-	lastActual  model.ActualState
-	lastCheckAt time.Time
+	lastDesired        model.DesiredState
+	lastDisableControl bool
+	lastActual         model.ActualState
+	lastCheckAt        time.Time
 
 	mu            sync.Mutex
 	desiredCancel context.CancelFunc
@@ -140,7 +141,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 
-func (w *Worker) readDesired() (model.DesiredState, bool) {
+func (w *Worker) readDesired() (model.DesiredState, bool, bool) {
 	key := model.Desired(
 		w.cfg.Cluster.ID,
 		w.membership.ClusterGroup,
@@ -149,7 +150,7 @@ func (w *Worker) readDesired() (model.DesiredState, bool) {
 
 	raw, ok := w.store.Get(key)
 	if !ok {
-		return "", false
+		return "", false, false
 	}
 
 	var doc model.DesiredDocument
@@ -159,15 +160,15 @@ func (w *Worker) readDesired() (model.DesiredState, bool) {
 			zap.String("key", key),
 			zap.Error(err),
 		)
-		return "", false
+		return "", false, false
 	}
 
-	return doc.State, true
+	return doc.State, doc.DisableControl, true
 }
 
-// reconcile decides whether to run desired execution: on desired change or when the check interval elapses.
+// reconcile decides whether to run desired execution: on desired/disableControl change or when the check interval elapses.
 func (w *Worker) reconcile(ctx context.Context) error {
-	desired, ok := w.readDesired()
+	desired, disableControl, ok := w.readDesired()
 	if !ok {
 		return nil
 	}
@@ -184,30 +185,32 @@ func (w *Worker) reconcile(ctx context.Context) error {
 		checkInterval = 5 * time.Second
 	}
 
-	if desired != w.lastDesired {
+	if desired != w.lastDesired || disableControl != w.lastDisableControl {
 		w.log.Debug(
 			"desired changed",
 			zap.String("desired", string(desired)),
 			zap.String("previous", string(w.lastDesired)),
+			zap.Bool("disable_control", disableControl),
 		)
 
 		w.lastDesired = desired
+		w.lastDisableControl = disableControl
 		w.lastCheckAt = now
 
-		w.startDesiredExecution(ctx, desired)
+		w.startDesiredExecution(ctx, desired, disableControl)
 		return nil
 	}
 
 	if w.lastCheckAt.IsZero() || now.Sub(w.lastCheckAt) >= checkInterval {
 		w.lastCheckAt = now
-		w.startDesiredExecution(ctx, desired)
+		w.startDesiredExecution(ctx, desired, disableControl)
 	}
 
 	return nil
 }
 
 // startDesiredExecution cancels any in-flight execution and starts a new goroutine for the given desired state.
-func (w *Worker) startDesiredExecution(parent context.Context, desired model.DesiredState) {
+func (w *Worker) startDesiredExecution(parent context.Context, desired model.DesiredState, disableControl bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -222,7 +225,7 @@ func (w *Worker) startDesiredExecution(parent context.Context, desired model.Des
 	go func() {
 		defer cancel()
 
-		w.applyDesired(ctx, desired)
+		w.applyDesired(ctx, desired, disableControl)
 	}()
 }
 
@@ -236,8 +239,8 @@ func (w *Worker) cancelCurrentDesired() {
 	}
 }
 
-// applyDesired waits for a session lease, builds the RoleExecutor, runs Reconcile, and writes the resulting status.
-func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
+// applyDesired waits for a session lease, builds the RoleExecutor, runs convergence or probe-only, and writes status.
+func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState, disableControl bool) {
 	if err := w.waitForSessionLease(ctx); err != nil {
 		w.log.Debug("session lease is not ready, skip role execution", zap.Error(err))
 		return
@@ -265,22 +268,27 @@ func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
 		RetryInterval: roleCfg.Timeouts.RetryInterval.Duration,
 	}
 
-	onTransition := func(status RoleStatus) {
-		w.writeStatus(ctx, status)
-	}
-
-	status := executor.Reconcile(ctx, RoleRequest{
+	req := RoleRequest{
 		ClusterGroup:    w.membership.ClusterGroup,
 		ManagementGroup: w.membership.ManagementGroup,
 		NodeID:          w.cfg.Node.NodeID,
 		Role:            w.role,
 		Desired:         string(desired),
-	}, onTransition)
+	}
+
+	var status RoleStatus
+	if disableControl {
+		status = executor.ReconcileDisabled(ctx, req)
+	} else {
+		onTransition := func(s RoleStatus) { w.writeStatus(ctx, s) }
+		status = executor.Reconcile(ctx, req, onTransition)
+	}
 
 	if model.ActualState(status.State) != w.lastActual {
 		w.log.Debug(
 			"role actual state changed",
 			zap.String("desired", string(desired)),
+			zap.Bool("disable_control", disableControl),
 			zap.String("actual", status.State),
 			zap.String("health", status.Health),
 			zap.Any("details", status.Details),

@@ -170,10 +170,10 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 
 	cmdType := model.CommandType(req.Type)
 	switch cmdType {
-	case model.CommandTypePromote, model.CommandTypeDisable, model.CommandTypeReload, model.CommandTypeIdleDrain:
+	case model.CommandTypePromote, model.CommandTypeDisable, model.CommandTypeReload, model.CommandTypeForcePassive:
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": fmt.Sprintf("unknown command type %q; valid types: promote, disable, reload, idle_drain", req.Type),
+			"error": fmt.Sprintf("unknown command type %q; valid types: promote, disable, reload, force_passive", req.Type),
 		})
 		return
 	}
@@ -190,8 +190,8 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if cmdType == model.CommandTypeIdleDrain {
-		if code, msg := s.validateIdleDrain(req.ClusterGroup, req.ManagementGroup); code != 0 {
+	if cmdType == model.CommandTypeForcePassive {
+		if code, msg := s.validateForcePassive(req.ClusterGroup, req.ManagementGroup); code != 0 {
 			writeJSON(w, code, map[string]string{"error": msg})
 			return
 		}
@@ -302,16 +302,14 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 		return http.StatusBadRequest, "promote is not applicable: all management groups have equal priority (active-active topology)"
 	}
 
-	// Active-passive: block only if a sibling with desired=idle has services that may still be running.
-	// actual=idle/passive/failed means services are confirmed down; allow promote in those cases.
+	// Block promote if any sibling group has services actively running.
 	for mg, info := range infos {
 		if mg == managementGroup {
 			continue
 		}
-		if info.desired == model.DesiredIdle &&
-			(info.actual == model.ActualActive || info.actual == model.ActualStarting) {
+		if info.actual == model.ActualActive || info.actual == model.ActualStarting {
 			return http.StatusConflict, fmt.Sprintf(
-				"cannot promote %q: management group %q has desired=idle but actual=%s (services may still be active)",
+				"cannot promote %q: management group %q has actual=%s (services may still be active)",
 				managementGroup, mg, info.actual,
 			)
 		}
@@ -320,9 +318,9 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 	return 0, ""
 }
 
-// validateIdleDrain checks that the target management group has desired=idle.
+// validateForcePassive checks that the target group has disable_control=true and desired=active.
 // Returns (0, "") if valid; (httpStatusCode, errorMessage) if blocked.
-func (s *Server) validateIdleDrain(clusterGroup, managementGroup string) (int, string) {
+func (s *Server) validateForcePassive(clusterGroup, managementGroup string) (int, string) {
 	raw, ok := s.store.Get(model.Desired(s.clusterID, clusterGroup, managementGroup))
 	if !ok {
 		return http.StatusBadRequest, fmt.Sprintf("management group %q not found in cluster group %q", managementGroup, clusterGroup)
@@ -331,8 +329,11 @@ func (s *Server) validateIdleDrain(clusterGroup, managementGroup string) (int, s
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return http.StatusInternalServerError, "failed to read desired state"
 	}
-	if doc.State != model.DesiredIdle {
-		return http.StatusConflict, fmt.Sprintf("idle_drain requires desired=idle, got desired=%s", doc.State)
+	if !doc.DisableControl {
+		return http.StatusConflict, fmt.Sprintf("force_passive requires disable_control=true, group %q is under normal management", managementGroup)
+	}
+	if doc.State != model.DesiredActive {
+		return http.StatusConflict, fmt.Sprintf("force_passive requires desired=active, got desired=%s", doc.State)
 	}
 	return 0, ""
 }

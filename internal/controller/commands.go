@@ -102,8 +102,8 @@ func (cc *CommandConsumer) processCommand(ctx context.Context, cmd model.Command
 		execErr = cc.execDisable(ctx, cmd)
 	case model.CommandTypeReload:
 		execErr = cc.execReload(ctx, cmd)
-	case model.CommandTypeIdleDrain:
-		execErr = cc.execIdleDrain(ctx, cmd)
+	case model.CommandTypeForcePassive:
+		execErr = cc.execForcePassive(ctx, cmd)
 	default:
 		execErr = fmt.Errorf("unknown command type: %s", cmd.Type)
 	}
@@ -195,20 +195,28 @@ func (cc *CommandConsumer) execPromote(ctx context.Context, cmd model.Command) e
 	return nil
 }
 
-// execDisable sets desired=idle for the management group, taking it out of active management.
+// execDisable sets disable_control=true on the management group, preserving its current desired state.
+// The controller stops managing the group; role workers switch to probe-only mode.
 func (cc *CommandConsumer) execDisable(ctx context.Context, cmd model.Command) error {
-	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredIdle)
+	currentState := model.DesiredPassive
+	if raw, ok := cc.store.Get(model.Desired(cc.clusterID, cmd.ClusterGroup, cmd.ManagementGroup)); ok {
+		var doc model.DesiredDocument
+		if err := json.Unmarshal(raw, &doc); err == nil {
+			currentState = doc.State
+		}
+	}
+	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, currentState, true)
 }
 
-// execReload clears the failed state by writing desired=passive, triggering a fresh passive convergence attempt.
+// execReload clears failed state by writing desired=passive, disable_control=false, triggering fresh convergence.
 func (cc *CommandConsumer) execReload(ctx context.Context, cmd model.Command) error {
-	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive)
+	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive, false)
 }
 
-// execIdleDrain force-stops services on a group that is in desired=idle by writing desired=passive.
-// Role workers run set_passive/force_stop actors and bring the group to actual=passive.
+// execForcePassive transfers a disable_control=true group with desired=active to desired=passive,
+// removing disable_control so the role workers run set_passive and bring services down.
 // The controller does not auto-activate any other group because switchoverTarget is not set.
-func (cc *CommandConsumer) execIdleDrain(ctx context.Context, cmd model.Command) error {
+func (cc *CommandConsumer) execForcePassive(ctx context.Context, cmd model.Command) error {
 	raw, ok := cc.store.Get(model.Desired(cc.clusterID, cmd.ClusterGroup, cmd.ManagementGroup))
 	if !ok {
 		return fmt.Errorf("desired state not found for %s/%s", cmd.ClusterGroup, cmd.ManagementGroup)
@@ -217,22 +225,22 @@ func (cc *CommandConsumer) execIdleDrain(ctx context.Context, cmd model.Command)
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return fmt.Errorf("failed to decode desired state: %w", err)
 	}
-	if doc.State != model.DesiredIdle {
-		return fmt.Errorf("idle_drain requires desired=idle, got desired=%s", doc.State)
+	if !doc.DisableControl {
+		return fmt.Errorf("force_passive requires disable_control=true, group is under normal management")
 	}
-	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive)
+	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive, false)
 }
 
-// activateTarget writes desired=active when no group is currently active (bootstrap / cold-start),
-// otherwise writes desired=passive via writeDesiredIfIdle so the controller runs two-phase switchover.
+// activateTarget writes desired=active when no managed group is currently active (bootstrap),
+// otherwise writes desired=passive, disable_control=false so the controller runs two-phase switchover.
 func (cc *CommandConsumer) activateTarget(ctx context.Context, clusterGroup, managementGroup string) error {
 	if cc.hasNoActiveGroup(clusterGroup) {
-		return cc.writeDesired(ctx, clusterGroup, managementGroup, model.DesiredActive)
+		return cc.writeDesired(ctx, clusterGroup, managementGroup, model.DesiredActive, false)
 	}
-	return cc.writeDesiredIfIdle(ctx, clusterGroup, managementGroup)
+	return cc.writeDesired(ctx, clusterGroup, managementGroup, model.DesiredPassive, false)
 }
 
-// hasNoActiveGroup returns true when no management group in the cluster group has desired=active.
+// hasNoActiveGroup returns true when no managed group (disable_control=false) has desired=active.
 func (cc *CommandConsumer) hasNoActiveGroup(clusterGroup string) bool {
 	for _, mg := range cc.store.ListChildren(model.ClusterGroup(cc.clusterID, clusterGroup)) {
 		raw, ok := cc.store.Get(model.Desired(cc.clusterID, clusterGroup, mg))
@@ -243,30 +251,18 @@ func (cc *CommandConsumer) hasNoActiveGroup(clusterGroup string) bool {
 		if err := json.Unmarshal(raw, &doc); err != nil {
 			continue
 		}
-		if doc.State == model.DesiredActive {
+		if doc.State == model.DesiredActive && !doc.DisableControl {
 			return false
 		}
 	}
 	return true
 }
 
-// writeDesiredIfIdle writes desired=passive only when the current desired state is idle.
-// Used by promote to take the target group out of maintenance mode.
-func (cc *CommandConsumer) writeDesiredIfIdle(ctx context.Context, clusterGroup, managementGroup string) error {
-	raw, ok := cc.store.Get(model.Desired(cc.clusterID, clusterGroup, managementGroup))
-	if ok {
-		var doc model.DesiredDocument
-		if err := json.Unmarshal(raw, &doc); err == nil && doc.State != model.DesiredIdle {
-			return nil
-		}
-	}
-	return cc.writeDesired(ctx, clusterGroup, managementGroup, model.DesiredPassive)
-}
-
-func (cc *CommandConsumer) writeDesired(ctx context.Context, clusterGroup, managementGroup string, state model.DesiredState) error {
+func (cc *CommandConsumer) writeDesired(ctx context.Context, clusterGroup, managementGroup string, state model.DesiredState, disableControl bool) error {
 	doc := model.DesiredDocument{
-		State:     state,
-		UpdatedAt: time.Now().UTC(),
+		State:          state,
+		DisableControl: disableControl,
+		UpdatedAt:      time.Now().UTC(),
 	}
 	data, err := json.Marshal(doc)
 	if err != nil {

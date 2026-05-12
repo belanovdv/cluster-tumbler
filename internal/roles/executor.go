@@ -59,59 +59,59 @@ func (e *RoleExecutor) forceStop(ctx context.Context, req RoleRequest) RoleStatu
 	return failedActor(res)
 }
 
-// Reconcile is the entry point for role convergence; dispatches to ensure (active/passive) or reconcileIdle.
+// Reconcile is the entry point for role convergence; dispatches to ensure for active or passive.
 func (e *RoleExecutor) Reconcile(ctx context.Context, req RoleRequest, onTransition func(RoleStatus)) RoleStatus {
 	switch req.Desired {
 	case "active":
 		return e.ensure(ctx, req, ProbeActive, SetActive, "active", "starting", onTransition)
 	case "passive":
 		return e.ensure(ctx, req, ProbePassive, SetPassive, "passive", "stopping", onTransition)
-	case "idle":
-		return e.reconcileIdle(ctx, req)
 	default:
 		return failed("unsupported desired state")
 	}
 }
 
-// reconcileIdle implements the idle probe loop: holds actual=active while probe_active passes;
-// on probe failure runs set_passive (force_stop fallback) and reports actual=idle.
-func (e *RoleExecutor) reconcileIdle(ctx context.Context, req RoleRequest) RoleStatus {
-	if cmd, ok := e.Actors[ProbeActive]; ok {
-		res := e.Runner.Run(ctx, e.build(req, ProbeActive, cmd), 1)
-		if res.ErrorType == ErrorExec {
-			return failedActor(res)
-		}
-		if res.OK {
-			return RoleStatus{
-				State:  "active",
-				Health: "warning",
-				Details: map[string]any{
-					"message": "Unmanaged: services active (desired=idle)",
-					"stdout":  res.Stdout,
-					"stderr":  res.Stderr,
-				},
-			}
+// ReconcileDisabled runs the probe corresponding to the desired state without any convergence actions.
+// Used when disable_control=true: the worker observes state but does not attempt to change it.
+// Probe passes → actual=desired, health=ok. Probe fails → actual=failed, health=failed.
+func (e *RoleExecutor) ReconcileDisabled(ctx context.Context, req RoleRequest) RoleStatus {
+	var probeActor ActorName
+	switch req.Desired {
+	case "active":
+		probeActor = ProbeActive
+	case "passive":
+		probeActor = ProbePassive
+	default:
+		return failed("unsupported desired state for disabled control mode")
+	}
+
+	cmd, ok := e.Actors[probeActor]
+	if !ok {
+		return RoleStatus{
+			State:  "failed",
+			Health: "failed",
+			Details: map[string]any{"message": "no probe actor configured"},
 		}
 	}
 
-	// probe_active failed or not configured — ensure services are stopped, then hand off.
-	deadlineCtx, cancel := context.WithTimeout(ctx, e.Converge)
-	defer cancel()
-
-	stopped := false
-	if cmd, ok := e.Actors[SetPassive]; ok {
-		res := e.Runner.Run(deadlineCtx, e.build(req, SetPassive, cmd), 1)
-		if res.ErrorType != ErrorExec && res.OK {
-			stopped = true
-		}
+	res := e.Runner.Run(ctx, e.build(req, probeActor, cmd), 1)
+	if res.ErrorType == ErrorExec {
+		return failedActor(res)
 	}
-	if !stopped {
-		e.forceStop(ctx, req)
+	if res.OK {
+		return RoleStatus{
+			State:  req.Desired,
+			Health: "ok",
+		}
 	}
 
 	return RoleStatus{
-		State:   "idle",
-		Health:  "warning",
-		Details: map[string]any{"message": "Idle"},
+		State:  "failed",
+		Health: "failed",
+		Details: map[string]any{
+			"message": "probe failed: actual state does not match desired",
+			"stdout":  res.Stdout,
+			"stderr":  res.Stderr,
+		},
 	}
 }
