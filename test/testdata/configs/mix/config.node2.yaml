@@ -19,9 +19,11 @@ api:
 cluster:
   id: second_cluster
   name: "custom second_cluster name"
-  groups:
+  groups:  
     geo_dc:
       name: "custom geo dc name"
+    rmq_cluster:
+      name: "custom RMQ name"
   failover_mode: manual
   leader_ttl: 2s
   leader_renew_interval: 500ms
@@ -34,6 +36,8 @@ node:
   memberships:
     - cluster_group: geo_dc
       management_group: DC2
+    - cluster_group: rmq_cluster
+      management_group: node2
 
 management_groups:
   geo_dc:
@@ -42,6 +46,11 @@ management_groups:
       roles:
         - core
         - mc
+  rmq_cluster:
+    node2:
+      priority: 1
+      roles:
+        - rmq
 
 roles:
   defaults:
@@ -78,3 +87,11 @@ roles:
       probe_passive: "test/testdata/scripts/probe_passive.sh mc"
       set_passive: "test/testdata/scripts/set_passive.sh mc"
       force_stop: "test/testdata/scripts/force_stop.sh mc"
+  rmq:
+    name: "custom RMQ name"
+    actors:
+      probe_active: "test/testdata/scripts/probe_active.sh rmq"
+      set_active: "test/testdata/scripts/set_active.sh rmq"
+      probe_passive: "test/testdata/scripts/probe_passive.sh rmq"
+      set_passive: "test/testdata/scripts/set_passive.sh rmq"
+      force_stop: "test/testdata/scripts/force_stop.sh rmq"
