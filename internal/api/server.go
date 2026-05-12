@@ -241,7 +241,7 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// validatePromote checks topology and IDLE constraints for a promote command.
+// validatePromote checks that the promote command can safely proceed.
 // Returns (0, "") if valid; (httpStatusCode, errorMessage) if blocked.
 func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, string) {
 	groupPrefix := model.ClusterGroup(s.clusterID, clusterGroup)
@@ -252,11 +252,8 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 	}
 
 	type mgInfo struct {
-		priority int
-		desired  model.DesiredState
-		managed  bool
-		actual   model.ActualState
-		hasCfg   bool
+		managed bool
+		actual  model.ActualState
 	}
 	infos := make(map[string]mgInfo, len(children))
 	targetFound := false
@@ -264,18 +261,9 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 	for _, mg := range children {
 		info := mgInfo{}
 
-		if raw, ok := s.store.Get(model.ManagementGroupConfig(s.clusterID, clusterGroup, mg)); ok {
-			var doc model.ManagementGroupConfigDocument
-			if json.Unmarshal(raw, &doc) == nil {
-				info.priority = doc.Priority
-				info.hasCfg = true
-			}
-		}
-
 		if raw, ok := s.store.Get(model.Desired(s.clusterID, clusterGroup, mg)); ok {
 			var doc model.DesiredDocument
 			if json.Unmarshal(raw, &doc) == nil {
-				info.desired = doc.State
 				info.managed = doc.Managed
 			}
 		}
@@ -295,27 +283,6 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 
 	if !targetFound {
 		return http.StatusBadRequest, fmt.Sprintf("management group %q not found in cluster group %q", managementGroup, clusterGroup)
-	}
-
-	// Detect active-active: all groups share the same priority
-	firstPri, firstSet, allSame := 0, false, true
-	for _, info := range infos {
-		if !info.hasCfg {
-			continue
-		}
-		if !firstSet {
-			firstPri = info.priority
-			firstSet = true
-			continue
-		}
-		if info.priority != firstPri {
-			allSame = false
-			break
-		}
-	}
-
-	if firstSet && allSame {
-		return http.StatusBadRequest, "promote is not applicable: all management groups have equal priority (active-active topology)"
 	}
 
 	// Block promote only if a sibling with managed=false is actively running —

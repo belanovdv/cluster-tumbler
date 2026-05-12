@@ -295,9 +295,8 @@ curl -X POST http://localhost:5080/api/v1/commands \
 
 **Response codes:** `202 Accepted` — command queued; `409 Conflict` — blocked by current state; `400 Bad Request` — invalid parameters.
 
-**`promote` constraints (active-passive topology):**
+**`promote` constraints:**
 - Blocked if any sibling has `managed=false` and `actual=active` or `actual=starting` (unmanaged active group cannot be drained; use `force_passive` first).
-- Not applicable in active-active topology (all groups have equal priority).
 
 **`demote` constraints:**
 - Blocked if any group in the cluster group has `actual=starting` or `actual=stopping` (cluster is transitioning).

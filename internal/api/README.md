@@ -21,7 +21,6 @@ For `enable`, `validateEnable` checks:
 - target group already has `managed=true` → `409`
 
 For `promote`, `validatePromote` additionally checks:
-- active-active topology (all groups equal priority) → `400`
 - any sibling group has `managed=false` and `actual=active` or `actual=starting` → `409` (unmanaged active group cannot be drained by the controller; use `force_passive` first)
 
 For `demote`, `validateDemote` checks:
