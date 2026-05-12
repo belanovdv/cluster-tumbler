@@ -479,7 +479,6 @@ func (c *Controller) applyPriorityPolicy(
 	// Active-passive topology: find the highest-priority available group.
 	target := c.findTarget(clusterGroup, groups)
 	if target == nil {
-		c.log.Debug("no available management groups for failover policy", zap.String("cluster_group", clusterGroup))
 		return nil
 	}
 
