@@ -35,7 +35,7 @@ type groupRuntime struct {
 	ManagementGroup string
 	Priority        int
 	Desired         model.DesiredState
-	DisableControl  bool
+	Managed         bool
 	Actual          model.ActualState
 	Health          model.HealthStatus
 	Available       bool
@@ -146,7 +146,7 @@ func (c *Controller) reconcileManagementGroup(
 	items := c.store.Prefix(prefix)
 	now := time.Now().UTC()
 
-	desired, disableControl := c.readDesired(clusterGroup, managementGroup)
+	desired, managed := c.readDesired(clusterGroup, managementGroup)
 
 	var (
 		seenRoles    bool
@@ -163,7 +163,7 @@ func (c *Controller) reconcileManagementGroup(
 	healthStatus := model.HealthOK
 	details := ""
 
-	if !disableControl {
+	if managed {
 		missing := c.missingExpectedRoleStates(clusterGroup, managementGroup)
 		if len(missing) > 0 {
 			actualState = model.ActualFailed
@@ -317,29 +317,29 @@ func (c *Controller) reconcileManagementGroup(
 		ManagementGroup: managementGroup,
 		Priority:        priority,
 		Desired:         desired,
-		DisableControl:  disableControl,
+		Managed:         managed,
 		Actual:          actualState,
 		Health:          healthStatus,
 		Available:       healthStatus != model.HealthFailed && actualState != model.ActualFailed,
 	}, nil
 }
 
-// readDesired returns the desired state and disable_control flag for a management group.
-// When no record exists (bootstrap / fresh node), returns (DesiredPassive, true) — passive + disabled by default.
+// readDesired returns the desired state and managed flag for a management group.
+// When no record exists (bootstrap / fresh node), returns (DesiredPassive, false) — passive + unmanaged by default.
 func (c *Controller) readDesired(clusterGroup, managementGroup string) (model.DesiredState, bool) {
 	key := model.Desired(c.cfg.Cluster.ID, clusterGroup, managementGroup)
 
 	raw, ok := c.store.Get(key)
 	if !ok {
-		return model.DesiredPassive, true
+		return model.DesiredPassive, false
 	}
 
 	var doc model.DesiredDocument
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		return model.DesiredPassive, true
+		return model.DesiredPassive, false
 	}
 
-	return doc.State, doc.DisableControl
+	return doc.State, doc.Managed
 }
 
 // missingExpectedRoleStates returns keys for roles that should have actual/health but do not (agent lost).
@@ -458,7 +458,7 @@ func (c *Controller) applyPriorityPolicy(
 	// Active-active topology: all groups share the same priority → activate all managed groups.
 	if allSamePriority(groups) {
 		for _, g := range groups {
-			if g.DisableControl {
+			if !g.Managed {
 				continue
 			}
 			if err := c.writeDesiredIfChanged(ctx, g.ClusterGroup, g.ManagementGroup, model.DesiredActive); err != nil {
@@ -477,10 +477,10 @@ func (c *Controller) applyPriorityPolicy(
 	// Determine which group currently holds active ownership.
 	// Primary signal: desired=active (managed only). Secondary: desired=passive but actual is still
 	// active/stopping — the group is mid-draining (Phase 1 already wrote desired=passive).
-	// Groups with disable_control=true are excluded: the controller does not manage them.
+	// Groups with managed=false are excluded: the controller does not manage them.
 	currentActive := ""
 	for _, g := range groups {
-		if g.Desired == model.DesiredActive && !g.DisableControl {
+		if g.Desired == model.DesiredActive && !!g.Managed {
 			currentActive = g.ManagementGroup
 			break
 		}
@@ -501,7 +501,7 @@ func (c *Controller) applyPriorityPolicy(
 			if g.ManagementGroup == target.ManagementGroup {
 				continue
 			}
-			if g.DisableControl {
+			if !g.Managed {
 				continue
 			}
 			if err := c.writeDesiredIfChanged(ctx, g.ClusterGroup, g.ManagementGroup, model.DesiredPassive); err != nil {
@@ -555,7 +555,7 @@ func (c *Controller) applyPriorityPolicy(
 	// Phase 2: activate target group.
 	// Guard: only proceed if phase-1 was controller-initiated for this target. This prevents
 	// the controller from auto-activating a passive group when the previous active was
-	// intentionally disabled (disable_control=true) by an admin — in that case phase-1 never
+	// intentionally disabled (managed=false) by an admin — in that case phase-1 never
 	// fires and switchoverTarget is never set.
 	if currentActive == "" && c.switchoverTarget[clusterGroup] != target.ManagementGroup {
 		return nil
@@ -570,7 +570,7 @@ func (c *Controller) applyPriorityPolicy(
 		if g.ManagementGroup == target.ManagementGroup {
 			continue
 		}
-		if g.DisableControl {
+		if !g.Managed {
 			continue
 		}
 		if err := c.writeDesiredIfChanged(ctx, g.ClusterGroup, g.ManagementGroup, model.DesiredPassive); err != nil {
@@ -596,12 +596,12 @@ func allSamePriority(groups []groupRuntime) bool {
 }
 
 // findTarget returns the highest-priority (lowest Priority value) available managed group.
-// Groups with disable_control=true are excluded from candidacy.
+// Groups with managed=false are excluded from candidacy.
 func (c *Controller) findTarget(clusterGroup string, groups []groupRuntime) *groupRuntime {
 	var result *groupRuntime
 	for i := range groups {
 		g := &groups[i]
-		if g.DisableControl {
+		if !g.Managed {
 			continue
 		}
 		if !g.Available {
@@ -705,10 +705,10 @@ func (c *Controller) handleAutoFailover(ctx context.Context, clusterGroup string
 	}
 
 	// Check if any top-priority group is unavailable (failed) due to an unintended failure.
-	// Groups with disable_control=true are excluded — intentional admin actions do not trigger auto-failover.
+	// Groups with managed=false are excluded — intentional admin actions do not trigger auto-failover.
 	topFailed := false
 	for _, g := range groups {
-		if g.Priority == minPri && !g.Available && !g.DisableControl {
+		if g.Priority == minPri && !g.Available && !!g.Managed {
 			topFailed = true
 			break
 		}
@@ -768,7 +768,7 @@ func (c *Controller) writeDesiredIfChanged(
 	if exists {
 		var current model.DesiredDocument
 		if err := json.Unmarshal(raw, &current); err == nil {
-			if current.State == target && !current.DisableControl {
+			if current.State == target && current.Managed {
 				return nil
 			}
 		}
@@ -776,8 +776,8 @@ func (c *Controller) writeDesiredIfChanged(
 
 	doc := model.DesiredDocument{
 		State:     target,
+		Managed:   true,
 		UpdatedAt: time.Now().UTC(),
-		// DisableControl: false — controller always writes managed state
 	}
 
 	data, err := json.Marshal(doc)

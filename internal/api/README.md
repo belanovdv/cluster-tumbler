@@ -18,12 +18,12 @@ Bearer token auth is optional: when `api.token` is empty all requests pass throu
 The handler validates the `type` field (must be `promote`, `disable`, `enable`, `reload`, or `force_passive`) and the required `cluster_group` / `management_group` fields.
 
 For `enable`, `validateEnable` checks:
-- target group already has `disable_control=false` → `409`
+- target group already has `managed=true` → `409`
 
 For `promote`, `validatePromote` additionally checks:
 - active-active topology (all groups equal priority) → `400`
 - any sibling group has `actual=active` or `actual=starting` → `409` (services may still be running)
 
 For `force_passive`, `validateForcePassive` checks:
-- target group does not have `disable_control=true` → `409`
+- target group has `managed=true` → `409`
 - target group does not have `desired=active` → `409`

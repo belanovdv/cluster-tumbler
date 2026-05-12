@@ -58,7 +58,7 @@ Examples (instance scenario): `rabbitmq/node1`, `rabbitmq/node2`
 | `active` | Group should be active |
 | `passive` | Group should be passive (standby) |
 
-An additional boolean flag `disable_control` can be set on a desired document. When `true`, the controller skips the group entirely and role workers run in probe-only mode (no convergence). The group is observed but not managed. Use the `disable` command to set this flag; use `force_passive` or `reload` to clear it.
+An additional boolean flag `managed` controls whether the group is under controller authority. When `false` (default at bootstrap), the controller skips the group and role workers run in probe-only mode — the group is observed but not controlled. When `true`, the controller manages the group normally. Use `disable` to set `managed=false`; use `enable`, `force_passive`, or `reload` to restore `managed=true`.
 
 **Actual** — the observed aggregate state of all roles in the group:
 `active` · `passive` · `starting` · `stopping` · `failed`
@@ -117,7 +117,7 @@ node:
   name: "Node 1"
   actors_base_dir: "."    # base directory for relative actor paths
   disable_api: false        # set true to suppress HTTP API and Web UI on this node
-  disable_controller: false # set true to exclude this node from leader election
+  managedler: false # set true to exclude this node from leader election
 
   memberships:
     - cluster_group: geo_dc
@@ -154,14 +154,14 @@ Actor commands accept both string (`"script.sh arg"`) and list (`["script.sh", "
 
 ### Restricting a Node (Unsafe Zones)
 
-`node.disable_api` and `node.disable_controller` are intended for agents deployed in untrusted network zones. The corresponding CLI flags override the config file values at startup:
+`node.disable_api` and `node.managedler` are intended for agents deployed in untrusted network zones. The corresponding CLI flags override the config file values at startup:
 
 ```bash
 --disable-api         # do not start HTTP API and Web UI
 --disable-controller  # do not participate in leader election
 ```
 
-> **Warning:** Every node with `disable_controller: true` reduces the number of candidates for the controller role. If all nodes in a cluster have it set, automatic failover stops working entirely. Use these options only for nodes in untrusted zones where the security risk outweighs the redundancy benefit.
+> **Warning:** Every node with `managedler: true` reduces the number of candidates for the controller role. If all nodes in a cluster have it set, automatic failover stops working entirely. Use these options only for nodes in untrusted zones where the security risk outweighs the redundancy benefit.
 
 ---
 
@@ -256,10 +256,10 @@ Four command types are supported:
 | Type | Action |
 |---|---|
 | `promote` | Swap priorities so the target group becomes highest-priority; controller performs two-phase switchover |
-| `disable` | Set `disable_control=true`, preserving the current `desired` state — removes the group from controller authority and switches role workers to probe-only mode |
-| `enable` | Clear `disable_control`, preserving the current `desired` state — returns the group to normal management; inverse of `disable` |
-| `reload` | Write `desired=passive, disable_control=false` — clears `failed` state and triggers fresh passive convergence |
-| `force_passive` | Requires `disable_control=true` and `desired=active`; writes `desired=passive, disable_control=false` so role workers run `set_passive` and bring services down before the group can be re-enabled |
+| `disable` | Set `managed=false`, preserving the current `desired` state — removes the group from controller authority and switches role workers to probe-only mode |
+| `enable` | Set `managed=true`, preserving the current `desired` state — returns the group to normal management; inverse of `disable` |
+| `reload` | Write `desired=passive, managed=true` — clears `failed` state and triggers fresh passive convergence |
+| `force_passive` | Requires `managed=false` and `desired=active`; writes `desired=passive, managed=true` so role workers run `set_passive` and bring services down before the group can be re-enabled |
 
 ```bash
 # Promote DC2 to highest priority (failover)
@@ -295,7 +295,7 @@ curl -X POST http://localhost:5080/api/v1/commands \
 - Not applicable in active-active topology (all groups have equal priority).
 
 **`force_passive` constraints:**
-- Blocked if `disable_control=false` — the group is under normal management; use `reload` instead.
+- Blocked if `managed=true` — the group is under normal management; use `reload` instead.
 - Blocked if `desired=passive` — services are already targeted to be passive.
 
 **Switchover consistency:** the controller uses a two-phase approach — it waits for the stopping group to reach `actual=passive|failed` before activating the target. Wait timeout is derived from role timeouts: `max(check_interval + converge + exec)` across the group's roles.

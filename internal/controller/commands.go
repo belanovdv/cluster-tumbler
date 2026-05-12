@@ -197,21 +197,9 @@ func (cc *CommandConsumer) execPromote(ctx context.Context, cmd model.Command) e
 	return nil
 }
 
-// execDisable sets disable_control=true on the management group, preserving its current desired state.
+// execDisable sets managed=false on the management group, preserving its current desired state.
 // The controller stops managing the group; role workers switch to probe-only mode.
 func (cc *CommandConsumer) execDisable(ctx context.Context, cmd model.Command) error {
-	currentState := model.DesiredPassive
-	if raw, ok := cc.store.Get(model.Desired(cc.clusterID, cmd.ClusterGroup, cmd.ManagementGroup)); ok {
-		var doc model.DesiredDocument
-		if err := json.Unmarshal(raw, &doc); err == nil {
-			currentState = doc.State
-		}
-	}
-	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, currentState, true)
-}
-
-// execEnable clears disable_control, restoring the group to normal management while preserving the current desired state.
-func (cc *CommandConsumer) execEnable(ctx context.Context, cmd model.Command) error {
 	currentState := model.DesiredPassive
 	if raw, ok := cc.store.Get(model.Desired(cc.clusterID, cmd.ClusterGroup, cmd.ManagementGroup)); ok {
 		var doc model.DesiredDocument
@@ -222,13 +210,25 @@ func (cc *CommandConsumer) execEnable(ctx context.Context, cmd model.Command) er
 	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, currentState, false)
 }
 
-// execReload clears failed state by writing desired=passive, disable_control=false, triggering fresh convergence.
-func (cc *CommandConsumer) execReload(ctx context.Context, cmd model.Command) error {
-	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive, false)
+// execEnable sets managed=true, restoring the group to normal management while preserving the current desired state.
+func (cc *CommandConsumer) execEnable(ctx context.Context, cmd model.Command) error {
+	currentState := model.DesiredPassive
+	if raw, ok := cc.store.Get(model.Desired(cc.clusterID, cmd.ClusterGroup, cmd.ManagementGroup)); ok {
+		var doc model.DesiredDocument
+		if err := json.Unmarshal(raw, &doc); err == nil {
+			currentState = doc.State
+		}
+	}
+	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, currentState, true)
 }
 
-// execForcePassive transfers a disable_control=true group with desired=active to desired=passive,
-// removing disable_control so the role workers run set_passive and bring services down.
+// execReload writes desired=passive, managed=true, triggering fresh passive convergence.
+func (cc *CommandConsumer) execReload(ctx context.Context, cmd model.Command) error {
+	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive, true)
+}
+
+// execForcePassive transfers a managed=false group with desired=active to desired=passive,
+// setting managed=true so the role workers run set_passive and bring services down.
 // The controller does not auto-activate any other group because switchoverTarget is not set.
 func (cc *CommandConsumer) execForcePassive(ctx context.Context, cmd model.Command) error {
 	raw, ok := cc.store.Get(model.Desired(cc.clusterID, cmd.ClusterGroup, cmd.ManagementGroup))
@@ -239,22 +239,22 @@ func (cc *CommandConsumer) execForcePassive(ctx context.Context, cmd model.Comma
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return fmt.Errorf("failed to decode desired state: %w", err)
 	}
-	if !doc.DisableControl {
-		return fmt.Errorf("force_passive requires disable_control=true, group is under normal management")
+	if doc.Managed {
+		return fmt.Errorf("force_passive requires managed=false, group is under normal management")
 	}
-	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive, false)
+	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive, true)
 }
 
 // activateTarget writes desired=active when no managed group is currently active (bootstrap),
-// otherwise writes desired=passive, disable_control=false so the controller runs two-phase switchover.
+// otherwise writes desired=passive, managed=true so the controller runs two-phase switchover.
 func (cc *CommandConsumer) activateTarget(ctx context.Context, clusterGroup, managementGroup string) error {
 	if cc.hasNoActiveGroup(clusterGroup) {
-		return cc.writeDesired(ctx, clusterGroup, managementGroup, model.DesiredActive, false)
+		return cc.writeDesired(ctx, clusterGroup, managementGroup, model.DesiredActive, true)
 	}
-	return cc.writeDesired(ctx, clusterGroup, managementGroup, model.DesiredPassive, false)
+	return cc.writeDesired(ctx, clusterGroup, managementGroup, model.DesiredPassive, true)
 }
 
-// hasNoActiveGroup returns true when no managed group (disable_control=false) has desired=active.
+// hasNoActiveGroup returns true when no managed group (managed=true) has desired=active.
 func (cc *CommandConsumer) hasNoActiveGroup(clusterGroup string) bool {
 	for _, mg := range cc.store.ListChildren(model.ClusterGroup(cc.clusterID, clusterGroup)) {
 		raw, ok := cc.store.Get(model.Desired(cc.clusterID, clusterGroup, mg))
@@ -265,18 +265,18 @@ func (cc *CommandConsumer) hasNoActiveGroup(clusterGroup string) bool {
 		if err := json.Unmarshal(raw, &doc); err != nil {
 			continue
 		}
-		if doc.State == model.DesiredActive && !doc.DisableControl {
+		if doc.State == model.DesiredActive && doc.Managed {
 			return false
 		}
 	}
 	return true
 }
 
-func (cc *CommandConsumer) writeDesired(ctx context.Context, clusterGroup, managementGroup string, state model.DesiredState, disableControl bool) error {
+func (cc *CommandConsumer) writeDesired(ctx context.Context, clusterGroup, managementGroup string, state model.DesiredState, managed bool) error {
 	doc := model.DesiredDocument{
-		State:          state,
-		DisableControl: disableControl,
-		UpdatedAt:      time.Now().UTC(),
+		State:     state,
+		Managed:   managed,
+		UpdatedAt: time.Now().UTC(),
 	}
 	data, err := json.Marshal(doc)
 	if err != nil {

@@ -325,7 +325,7 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 	return 0, ""
 }
 
-// validateEnable checks that the target group has disable_control=true.
+// validateEnable checks that the target group has managed=false.
 // Returns (0, "") if valid; (httpStatusCode, errorMessage) if blocked.
 func (s *Server) validateEnable(clusterGroup, managementGroup string) (int, string) {
 	raw, ok := s.store.Get(model.Desired(s.clusterID, clusterGroup, managementGroup))
@@ -336,13 +336,13 @@ func (s *Server) validateEnable(clusterGroup, managementGroup string) (int, stri
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return http.StatusInternalServerError, "failed to read desired state"
 	}
-	if !doc.DisableControl {
-		return http.StatusConflict, fmt.Sprintf("group %q is already under normal management (disable_control=false)", managementGroup)
+	if doc.Managed {
+		return http.StatusConflict, fmt.Sprintf("group %q is already under normal management (managed=true)", managementGroup)
 	}
 	return 0, ""
 }
 
-// validateForcePassive checks that the target group has disable_control=true and desired=active.
+// validateForcePassive checks that the target group has managed=false and desired=active.
 // Returns (0, "") if valid; (httpStatusCode, errorMessage) if blocked.
 func (s *Server) validateForcePassive(clusterGroup, managementGroup string) (int, string) {
 	raw, ok := s.store.Get(model.Desired(s.clusterID, clusterGroup, managementGroup))
@@ -353,8 +353,8 @@ func (s *Server) validateForcePassive(clusterGroup, managementGroup string) (int
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return http.StatusInternalServerError, "failed to read desired state"
 	}
-	if !doc.DisableControl {
-		return http.StatusConflict, fmt.Sprintf("force_passive requires disable_control=true, group %q is under normal management", managementGroup)
+	if doc.Managed {
+		return http.StatusConflict, fmt.Sprintf("force_passive requires managed=false, group %q is under normal management", managementGroup)
 	}
 	if doc.State != model.DesiredActive {
 		return http.StatusConflict, fmt.Sprintf("force_passive requires desired=active, got desired=%s", doc.State)

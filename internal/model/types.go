@@ -29,10 +29,10 @@ const (
 )
 
 type DesiredDocument struct {
-	State          DesiredState `json:"state"`
-	DisableControl bool         `json:"disable_control,omitempty"`
-	UpdatedAt      time.Time    `json:"updated_at"`
-	Details        string       `json:"details,omitempty"`
+	State     DesiredState `json:"state"`
+	Managed   bool         `json:"managed,omitempty"`
+	UpdatedAt time.Time    `json:"updated_at"`
+	Details   string       `json:"details,omitempty"`
 }
 
 type ActualDocument struct {
@@ -82,10 +82,10 @@ type CommandType string
 
 const (
 	CommandTypePromote      CommandType = "promote"       // swap priorities so target becomes highest-priority
-	CommandTypeDisable      CommandType = "disable"       // set disable_control=true, preserving current desired state
-	CommandTypeEnable       CommandType = "enable"        // clear disable_control=true, preserving current desired state
+	CommandTypeDisable      CommandType = "disable"       // set managed=false, preserving current desired state
+	CommandTypeEnable       CommandType = "enable"        // set managed=true, preserving current desired state
 	CommandTypeReload       CommandType = "reload"        // clear failed state, attempt passive convergence
-	CommandTypeForcePassive CommandType = "force_passive" // force-stop services on a group with disable_control=true
+	CommandTypeForcePassive CommandType = "force_passive" // force-stop services on a group with managed=false
 )
 
 // CommandStatus tracks the lifecycle stages of a queued command.

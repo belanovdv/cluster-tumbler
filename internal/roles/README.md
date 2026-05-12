@@ -2,11 +2,11 @@
 
 Per-node role execution engine. Runs independently of leadership.
 
-`manager.go` — `Manager` spawns one `Worker` per (management_group, role) membership. Each worker polls on a hardcoded 500ms internal ticker and triggers execution on desired change, `disable_control` change, or when the check interval (`roles.<id>.timeouts.check_interval`) elapses. On any condition it calls `startDesiredExecution`, which cancels any in-flight run and starts a new goroutine.
+`manager.go` — `Manager` spawns one `Worker` per (management_group, role) membership. Each worker polls on a hardcoded 500ms internal ticker and triggers execution on desired change, `managed` change, or when the check interval (`roles.<id>.timeouts.check_interval`) elapses. On any condition it calls `startDesiredExecution`, which cancels any in-flight run and starts a new goroutine.
 
-`executor.go` — `RoleExecutor.Reconcile` dispatches to `ensure` for active/passive convergence. `ReconcileDisabled` is used instead when `disable_control=true`.
+`executor.go` — `RoleExecutor.Reconcile` dispatches to `ensure` for active/passive convergence. `ReconcileDisabled` is used instead when `managed=false`.
 
-**Probe-only mode** (`disable_control=true`): `ReconcileDisabled` runs the probe corresponding to `desired` (`probe_active` for desired=active, `probe_passive` for desired=passive) without any convergence actions.
+**Probe-only mode** (`managed=false`): `ReconcileDisabled` runs the probe corresponding to `desired` (`probe_active` for desired=active, `probe_passive` for desired=passive) without any convergence actions.
 - Probe passes → `actual=desired`, `health=ok`
 - Probe fails → `actual=failed`, `health=failed`
 

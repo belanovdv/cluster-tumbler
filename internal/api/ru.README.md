@@ -15,6 +15,15 @@ Bearer-токен аутентификация опциональна: если 
 
 ### Валидация команд (`POST /api/v1/commands`)
 
-Обработчик проверяет поле `type` (должно быть `promote`, `disable` или `reload`) и обязательные поля `cluster_group` / `management_group`. Для `promote` дополнительно выполняется `validatePromote`:
+Обработчик проверяет поле `type` (должно быть `promote`, `disable`, `enable`, `reload` или `force_passive`) и обязательные поля `cluster_group` / `management_group`.
+
+Для `enable` выполняется `validateEnable`:
+- целевая группа уже имеет `managed=true` → `409`
+
+Для `promote` дополнительно выполняется `validatePromote`:
 - active-active топология (все группы имеют одинаковый приоритет) → `400`
-- любая смежная группа имеет `desired=idle` **и** `actual=active|starting` → `409`
+- любая смежная группа имеет `actual=active` или `actual=starting` → `409` (сервисы могут ещё работать)
+
+Для `force_passive` выполняется `validateForcePassive`:
+- целевая группа имеет `managed=true` → `409`
+- целевая группа не имеет `desired=active` → `409`

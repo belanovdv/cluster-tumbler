@@ -72,7 +72,7 @@ func (e *RoleExecutor) Reconcile(ctx context.Context, req RoleRequest, onTransit
 }
 
 // ReconcileDisabled runs the probe corresponding to the desired state without any convergence actions.
-// Used when disable_control=true: the worker observes state but does not attempt to change it.
+// Used when managed=false: the worker observes state but does not attempt to change it.
 // Probe passes → actual=desired, health=ok. Probe fails → actual=failed, health=failed.
 func (e *RoleExecutor) ReconcileDisabled(ctx context.Context, req RoleRequest) RoleStatus {
 	var probeActor ActorName

@@ -524,8 +524,8 @@ function renderGroups() {
       const mg = mgs[mgName];
       const isSelected = selected && selected.groupName === groupName && selected.mgName === mgName;
 
-      const disableCtrl = mg.desired && mg.desired.disable_control;
-      html += '<div class="mg-item' + (isSelected ? ' selected' : '') + (disableCtrl ? ' disabled-control' : '') + '" onclick="selectMG(\'' + escapeHtml(groupName) + '\', \'' + escapeHtml(mgName) + '\')">';
+      const unmanaged = mg.desired && !mg.desired.managed;
+      html += '<div class="mg-item' + (isSelected ? ' selected' : '') + (unmanaged ? ' disabled-control' : '') + '" onclick="selectMG(\'' + escapeHtml(groupName) + '\', \'' + escapeHtml(mgName) + '\')">';
       html += '<div class="mg-name">' + titleWithID(mg, mgName) + '</div>';
       html += '<div class="badges">';
       html += badge("desired", docState(mg.desired), "state");
@@ -534,7 +534,7 @@ function renderGroups() {
       if (mg.config && mg.config.priority) {
         html += '<span class="badge">priority: ' + escapeHtml(mg.config.priority) + '</span>';
       }
-      html += '<span class="badge ctrl-badge-' + (disableCtrl ? 'disabled' : 'enabled') + '">control_disabled: ' + (disableCtrl ? 'true' : 'false') + '</span>';
+      html += '<span class="badge ctrl-badge-' + (unmanaged ? 'disabled' : 'enabled') + '">managed: ' + (unmanaged ? 'false' : 'true') + '</span>';
       html += '</div>';
       html += '</div>';
     }
@@ -559,9 +559,9 @@ function renderDetails() {
 
   const group = state.cluster.groups[selected.groupName];
   const mg = group.management_groups[selected.mgName];
-  const detailsDisableCtrl = mg.desired && mg.desired.disable_control;
+  const unmanaged = mg.desired && !mg.desired.managed;
 
-  let html = '<div' + (detailsDisableCtrl ? ' class="disabled-control"' : '') + '>';
+  let html = '<div' + (unmanaged ? ' class="disabled-control"' : '') + '>';
   html += '<div class="details-title">' +
 	    titleWithID(group, selected.groupName) +
 	    ' / ' +

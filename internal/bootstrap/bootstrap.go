@@ -232,7 +232,7 @@ func (b *Bootstrapper) ensureMembership(ctx context.Context, membership config.M
 
 	desired := model.DesiredDocument{
 		State:          model.DesiredPassive,
-		DisableControl: true,
+		Managed: false,
 		UpdatedAt:      now,
 		Details:        "bootstrap",
 	}

@@ -92,8 +92,8 @@ type Worker struct {
 	etcd       *etcd.Client
 	log        *zap.Logger
 
-	lastDesired        model.DesiredState
-	lastDisableControl bool
+	lastDesired model.DesiredState
+	lastManaged bool
 	lastActual         model.ActualState
 	lastCheckAt        time.Time
 
@@ -163,12 +163,12 @@ func (w *Worker) readDesired() (model.DesiredState, bool, bool) {
 		return "", false, false
 	}
 
-	return doc.State, doc.DisableControl, true
+	return doc.State, doc.Managed, true
 }
 
-// reconcile decides whether to run desired execution: on desired/disableControl change or when the check interval elapses.
+// reconcile decides whether to run desired execution: on desired/managed change or when the check interval elapses.
 func (w *Worker) reconcile(ctx context.Context) error {
-	desired, disableControl, ok := w.readDesired()
+	desired, managed, ok := w.readDesired()
 	if !ok {
 		return nil
 	}
@@ -185,32 +185,32 @@ func (w *Worker) reconcile(ctx context.Context) error {
 		checkInterval = 5 * time.Second
 	}
 
-	if desired != w.lastDesired || disableControl != w.lastDisableControl {
+	if desired != w.lastDesired || managed != w.lastManaged {
 		w.log.Debug(
 			"desired changed",
 			zap.String("desired", string(desired)),
 			zap.String("previous", string(w.lastDesired)),
-			zap.Bool("disable_control", disableControl),
+			zap.Bool("managed", managed),
 		)
 
 		w.lastDesired = desired
-		w.lastDisableControl = disableControl
+		w.lastManaged = managed
 		w.lastCheckAt = now
 
-		w.startDesiredExecution(ctx, desired, disableControl)
+		w.startDesiredExecution(ctx, desired, managed)
 		return nil
 	}
 
 	if w.lastCheckAt.IsZero() || now.Sub(w.lastCheckAt) >= checkInterval {
 		w.lastCheckAt = now
-		w.startDesiredExecution(ctx, desired, disableControl)
+		w.startDesiredExecution(ctx, desired, managed)
 	}
 
 	return nil
 }
 
 // startDesiredExecution cancels any in-flight execution and starts a new goroutine for the given desired state.
-func (w *Worker) startDesiredExecution(parent context.Context, desired model.DesiredState, disableControl bool) {
+func (w *Worker) startDesiredExecution(parent context.Context, desired model.DesiredState, managed bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -225,7 +225,7 @@ func (w *Worker) startDesiredExecution(parent context.Context, desired model.Des
 	go func() {
 		defer cancel()
 
-		w.applyDesired(ctx, desired, disableControl)
+		w.applyDesired(ctx, desired, managed)
 	}()
 }
 
@@ -240,7 +240,7 @@ func (w *Worker) cancelCurrentDesired() {
 }
 
 // applyDesired waits for a session lease, builds the RoleExecutor, runs convergence or probe-only, and writes status.
-func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState, disableControl bool) {
+func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState, managed bool) {
 	if err := w.waitForSessionLease(ctx); err != nil {
 		w.log.Debug("session lease is not ready, skip role execution", zap.Error(err))
 		return
@@ -277,7 +277,7 @@ func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState, d
 	}
 
 	var status RoleStatus
-	if disableControl {
+	if !managed {
 		status = executor.ReconcileDisabled(ctx, req)
 	} else {
 		onTransition := func(s RoleStatus) { w.writeStatus(ctx, s) }
@@ -288,7 +288,7 @@ func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState, d
 		w.log.Debug(
 			"role actual state changed",
 			zap.String("desired", string(desired)),
-			zap.Bool("disable_control", disableControl),
+			zap.Bool("managed", managed),
 			zap.String("actual", status.State),
 			zap.String("health", status.Health),
 			zap.Any("details", status.Details),

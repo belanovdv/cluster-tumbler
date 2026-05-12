@@ -8,7 +8,7 @@ Domain types and etcd key scheme. No business logic.
 
 `DesiredDocument` carries two fields that together define management intent:
 - `state` — target state: `active` or `passive`
-- `disable_control` — when `true`, the controller skips this group entirely and the role worker runs in probe-only mode (no convergence)
+- `managed` — when `true`, the group is under normal controller authority; when `false` (default), the controller skips the group and the role worker runs in probe-only mode (no convergence)
 
 `keys.go` — pure functions that construct etcd key paths. The key hierarchy is:
 ```

@@ -57,10 +57,11 @@
 |---|---|
 | `active` | Группа должна быть активна |
 | `passive` | Группа должна быть пассивна (резерв) |
-| `idle` | Группа в обслуживании / не сконфигурирована |
+
+Дополнительный булев флаг `managed` определяет, находится ли группа под управлением контроллера. Когда `false` (умолчание при bootstrap), контроллер пропускает группу, а воркеры ролей работают в режиме только наблюдения — группа отслеживается, но не управляется. Когда `true`, группа находится под нормальным управлением. Используйте `disable` для установки `managed=false`; `enable`, `force_passive` или `reload` — для восстановления `managed=true`.
 
 **Actual** — наблюдаемое агрегированное состояние всех ролей в группе:
-`idle` · `starting` · `active` · `passive` · `stopping` · `failed`
+`active` · `passive` · `starting` · `stopping` · `failed`
 
 **Health**: `ok` · `warning` · `failed`
 
@@ -140,7 +141,7 @@ roles:
       details_max_size: 4096
 
   core:
-    name: "Core"
+    name: "Core Service"
     actors:
       probe_active:  "scripts/probe_active.sh core"
       set_active:    "scripts/set_active.sh core"
@@ -176,8 +177,8 @@ roles:
   config/roles/{role_id}
   config/cluster_groups/{cg}/_meta
   config/cluster_groups/{cg}/{mg} # конфиг management group (priority, roles)
-  commands/{command_id}           # очередь команд — продюсер реализован
-  commands_history/{command_id}   # архив команд — потребитель не реализован
+  commands/{command_id}           # очередь ожидающих/выполняемых команд
+  commands_history/{command_id}   # архив выполненных/упавших команд
   {cluster_group}/{mg}/desired
   {cluster_group}/{mg}/actual
   {cluster_group}/{mg}/health
@@ -206,7 +207,6 @@ roles:
 | Есть и active, и passive | `failed` | `failed` |
 | Есть starting | `starting` | `warning` |
 | Есть stopping | `stopping` | `warning` |
-| Есть idle (нет failed) | `idle` | `warning` |
 | Есть failed | `failed` | `failed` |
 | Ожидаемые ключи ролей отсутствуют | `failed` | `failed` |
 
@@ -251,13 +251,15 @@ go run ./cmd/main.go --config config.yaml \
 
 ### POST /api/v1/commands
 
-Поддерживаются три типа команд:
+Поддерживаются пять типов команд:
 
 | Тип | Действие |
 |---|---|
 | `promote` | Обмен приоритетами — целевая группа становится наивысшего приоритета; контроллер выполняет двухфазное переключение |
-| `disable` | Установка `desired=idle` — вывод группы из управления (режим обслуживания) |
-| `reload` | Сброс состояния `failed`, попытка перевода в passive |
+| `disable` | Установка `managed=false`, сохраняя текущее `desired` — вывод группы из зоны управления; воркеры переходят в режим только наблюдения |
+| `enable` | Установка `managed=true`, сохраняя текущее `desired` — возврат группы под нормальное управление; обратная операция к `disable` |
+| `reload` | Запись `desired=passive, managed=true` — сброс состояния `failed` и запуск повторной passive-конвергенции |
+| `force_passive` | Требует `managed=false` и `desired=active`; записывает `desired=passive, managed=true` — воркеры выполняют `set_passive` и останавливают сервисы перед повторным включением в пул |
 
 ```bash
 # Продвинуть DC2 на высший приоритет (failover)
@@ -270,6 +272,16 @@ curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"disable","cluster_group":"geo_dc","management_group":"DC1"}'
 
+# Вернуть DC1 под нормальное управление после обслуживания
+curl -X POST http://localhost:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"enable","cluster_group":"geo_dc","management_group":"DC1"}'
+
+# Graceful-остановка сервисов на disabled-but-active DC1 перед обслуживанием
+curl -X POST http://localhost:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"force_passive","cluster_group":"geo_dc","management_group":"DC1"}'
+
 # Сбросить DC1 после устранения неисправности
 curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
@@ -279,8 +291,12 @@ curl -X POST http://localhost:5080/api/v1/commands \
 **Коды ответа:** `202 Accepted` — команда принята; `409 Conflict` — заблокирована текущим состоянием; `400 Bad Request` — некорректные параметры.
 
 **Ограничения `promote` (active-passive топология):**
-- Заблокирован, если любая другая группа имеет `desired=idle` **и** `actual=active|starting` (сервисы могут ещё работать).
+- Заблокирован, если любая другая группа имеет `actual=active` или `actual=starting` (сервисы могут ещё работать).
 - Не применим в active-active топологии (все группы имеют одинаковый приоритет).
+
+**Ограничения `force_passive`:**
+- Заблокирован, если `managed=true` — группа под нормальным управлением; используйте `reload`.
+- Заблокирован, если `desired=passive` — сервисы уже переводятся в пассивный режим.
 
 **Консистентность переключения:** контроллер использует двухфазный подход — ожидает перехода останавливаемой группы в `actual=passive|failed` перед активацией целевой. Таймаут ожидания вычисляется из таймаутов ролей: `max(check_interval + converge + exec)` по всем ролям группы.
 
@@ -294,12 +310,12 @@ curl -X POST http://localhost:5080/api/v1/commands \
 
 Одностраничный дашборд подключается к `/api/v1/stream` через `EventSource` и обновляется в реальном времени без перезагрузки страницы. Отображает:
 - Метаданные кластера и текущего лидера.
-- Cluster groups и management groups с состоянием desired/actual/health.
+- Cluster groups и management groups с состоянием desired/actual/health и флагом `managed`.
 - Состояние ролей на каждом узле с деталями вывода акторов.
 - Статус регистрации и сессий всех подключённых агентов.
 
 В UI не реализовано:
-- Управление desired state (active / passive / idle)
+- Элементы управления командами (promote, disable, enable, force_passive, reload)
 - Редактор конфигурации
 - Просмотр истории и diff
 - Аутентификация / контроль доступа
@@ -312,7 +328,7 @@ curl -X POST http://localhost:5080/api/v1/commands \
 - Go-бинарник; один процесс на узел
 - etcd v3 адаптер с watch-based синхронизацией состояния
 - In-memory `StateStore` (дерево с индексацией по пути)
-- Bootstrap — заполнение ключей etcd при первом запуске
+- Bootstrap — заполнение ключей etcd при первом запуске (`state=passive, managed=false`)
 - Lifecycle реестра и сессии
 - Выборы лидера через TTL lease в etcd
 - Агрегация состояния контроллером
@@ -325,12 +341,12 @@ curl -X POST http://localhost:5080/api/v1/commands \
 - Флаги `--disable-api` / `--disable-controller` (поддержка небезопасных зон)
 - JSON API (`/api/v1/state`)
 - SSE live-update поток (`/api/v1/stream`)
-- API команд управления (`/api/v1/commands`) — `promote`, `disable`, `reload` с потребителем на стороне лидера
+- API команд управления (`/api/v1/commands`) — `promote`, `disable`, `enable`, `reload`, `force_passive` с потребителем на стороне лидера
 
 ### Частично реализовано
 - Draft Web UI — только мониторинг состояния в реальном времени
 - Config watcher — обнаруживает изменения конфигурации в etcd, но не распространяет их на запущенные воркеры
 
 ### Не реализовано
-- Полноценный Web UI (дизайн, аутентификация, элементы управления — desired state, редактор конфигурации, история/diff)
+- Полноценный Web UI (дизайн, аутентификация, элементы управления — команды, редактор конфигурации, история/diff)
 - Логика anti-flapping — защита от быстрого переключения `desired` при нестабильном health группы; требует окна стабилизации перед применением решения о failover
