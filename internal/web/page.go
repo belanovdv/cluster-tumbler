@@ -235,6 +235,16 @@ body {
   color:var(--muted);
 }
 
+.ctrl-badge-disabled {
+  background:var(--idle);
+  color:var(--muted);
+}
+
+.ctrl-badge-enabled {
+  background:transparent;
+  color:var(--muted);
+}
+
 .details-title {
   font-size:21px;
   font-weight:700;
@@ -525,6 +535,7 @@ function renderGroups() {
       if (mg.config && mg.config.priority) {
         html += '<span class="badge">priority: ' + escapeHtml(mg.config.priority) + '</span>';
       }
+      html += '<span class="badge ctrl-badge-' + (disableCtrl ? 'disabled' : 'enabled') + '">control_disabled: ' + (disableCtrl ? 'true' : 'false') + '</span>';
       html += '</div>';
       html += '</div>';
     }
