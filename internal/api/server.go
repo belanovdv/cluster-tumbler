@@ -170,10 +170,10 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 
 	cmdType := model.CommandType(req.Type)
 	switch cmdType {
-	case model.CommandTypePromote, model.CommandTypeDisable, model.CommandTypeEnable, model.CommandTypeReload, model.CommandTypeForcePassive:
+	case model.CommandTypePromote, model.CommandTypeDemote, model.CommandTypeDisable, model.CommandTypeEnable, model.CommandTypeForcePassive:
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": fmt.Sprintf("unknown command type %q; valid types: promote, disable, enable, reload, force_passive", req.Type),
+			"error": fmt.Sprintf("unknown command type %q; valid types: promote, demote, disable, enable, force_passive", req.Type),
 		})
 		return
 	}
@@ -185,6 +185,13 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 
 	if cmdType == model.CommandTypePromote {
 		if code, msg := s.validatePromote(req.ClusterGroup, req.ManagementGroup); code != 0 {
+			writeJSON(w, code, map[string]string{"error": msg})
+			return
+		}
+	}
+
+	if cmdType == model.CommandTypeDemote {
+		if code, msg := s.validateDemote(req.ClusterGroup, req.ManagementGroup); code != 0 {
 			writeJSON(w, code, map[string]string{"error": msg})
 			return
 		}
@@ -325,6 +332,92 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 				managementGroup, mg, info.actual,
 			)
 		}
+	}
+
+	return 0, ""
+}
+
+// validateDemote checks cluster stability and candidate availability for a demote command.
+// For desired=passive groups, no further validation is needed (convergence reset).
+// For desired=active groups, blocks if any group is transitioning (starting/stopping) or
+// if no passive managed group with health=ok is available as replacement.
+// Returns (0, "") if valid; (httpStatusCode, errorMessage) if blocked.
+func (s *Server) validateDemote(clusterGroup, managementGroup string) (int, string) {
+	groupPrefix := model.ClusterGroup(s.clusterID, clusterGroup)
+	children := s.store.ListChildren(groupPrefix)
+
+	if len(children) == 0 {
+		return http.StatusBadRequest, fmt.Sprintf("cluster group %q not found or has no management groups", clusterGroup)
+	}
+
+	targetFound := false
+	var targetDesired model.DesiredState
+	for _, mg := range children {
+		if mg == managementGroup {
+			targetFound = true
+			if raw, ok := s.store.Get(model.Desired(s.clusterID, clusterGroup, mg)); ok {
+				var doc model.DesiredDocument
+				if json.Unmarshal(raw, &doc) == nil {
+					targetDesired = doc.State
+				}
+			}
+			break
+		}
+	}
+
+	if !targetFound {
+		return http.StatusBadRequest, fmt.Sprintf("management group %q not found in cluster group %q", managementGroup, clusterGroup)
+	}
+
+	if targetDesired == model.DesiredPassive {
+		return 0, ""
+	}
+
+	hasCandidate := false
+	for _, mg := range children {
+		var actual model.ActualState
+		if raw, ok := s.store.Get(model.Actual(s.clusterID, clusterGroup, mg)); ok {
+			var act model.ActualDocument
+			if json.Unmarshal(raw, &act) == nil {
+				actual = act.State
+			}
+		}
+
+		if actual == model.ActualStarting || actual == model.ActualStopping {
+			return http.StatusConflict, fmt.Sprintf(
+				"cannot demote %q: management group %q has actual=%s (cluster is transitioning)",
+				managementGroup, mg, actual,
+			)
+		}
+
+		if mg == managementGroup {
+			continue
+		}
+
+		desRaw, ok := s.store.Get(model.Desired(s.clusterID, clusterGroup, mg))
+		if !ok || actual != model.ActualPassive {
+			continue
+		}
+		var des model.DesiredDocument
+		if json.Unmarshal(desRaw, &des) != nil || !des.Managed {
+			continue
+		}
+		healthRaw, ok := s.store.Get(model.Health(s.clusterID, clusterGroup, mg))
+		if !ok {
+			continue
+		}
+		var h model.HealthDocument
+		if json.Unmarshal(healthRaw, &h) != nil || h.Status != model.HealthOK {
+			continue
+		}
+		hasCandidate = true
+	}
+
+	if !hasCandidate {
+		return http.StatusConflict, fmt.Sprintf(
+			"cannot demote %q: no available passive managed group with health=ok in cluster group %q",
+			managementGroup, clusterGroup,
+		)
 	}
 
 	return 0, ""

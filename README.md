@@ -58,7 +58,7 @@ Examples (instance scenario): `rabbitmq/node1`, `rabbitmq/node2`
 | `active` | Group should be active |
 | `passive` | Group should be passive (standby) |
 
-An additional boolean flag `managed` controls whether the group is under controller authority. When `false` (default at bootstrap), the controller skips the group and role workers run in probe-only mode — the group is observed but not controlled. When `true`, the controller manages the group normally. Use `disable` to set `managed=false`; use `enable`, `force_passive`, or `reload` to restore `managed=true`.
+An additional boolean flag `managed` controls whether the group is under controller authority. When `false` (default at bootstrap), the controller skips the group and role workers run in probe-only mode — the group is observed but not controlled. When `true`, the controller manages the group normally. Use `disable` to set `managed=false`; use `enable` or `force_passive` to restore `managed=true`.
 
 **Actual** — the observed aggregate state of all roles in the group:
 `active` · `passive` · `starting` · `stopping` · `failed`
@@ -251,21 +251,31 @@ All `/api/v1/*` endpoints accept an optional `Authorization: Bearer <token>` hea
 
 ### POST /api/v1/commands
 
-Four command types are supported:
+Five command types are supported:
 
 | Type | Action |
 |---|---|
 | `promote` | Swap priorities so the target group becomes highest-priority; controller performs two-phase switchover |
+| `demote` | Strip the specified active group of priority; auto-selects the best passive replacement (`managed=true`, `actual=passive`, `health=ok`, highest priority) and initiates switchover. If the group already has `desired=passive`, re-triggers passive convergence instead |
 | `disable` | Set `managed=false`, preserving the current `desired` state — removes the group from controller authority and switches role workers to probe-only mode |
 | `enable` | Set `managed=true`, preserving the current `desired` state — returns the group to normal management; inverse of `disable` |
-| `reload` | Write `desired=passive, managed=true` — clears `failed` state and triggers fresh passive convergence |
 | `force_passive` | Requires `managed=false` and `desired=active`; writes `desired=passive, managed=true` so role workers run `set_passive` and bring services down before the group can be re-enabled |
 
 ```bash
-# Promote DC2 to highest priority (failover)
+# Promote DC2 to highest priority (failover to specific target)
 curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"promote","cluster_group":"geo_dc","management_group":"DC2"}'
+
+# Demote DC1 (controller auto-selects best passive replacement)
+curl -X POST http://localhost:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"demote","cluster_group":"geo_dc","management_group":"DC1"}'
+
+# Re-trigger passive convergence on a stuck passive group
+curl -X POST http://localhost:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"demote","cluster_group":"geo_dc","management_group":"DC1"}'
 
 # Take DC1 out of rotation (maintenance mode)
 curl -X POST http://localhost:5080/api/v1/commands \
@@ -281,21 +291,21 @@ curl -X POST http://localhost:5080/api/v1/commands \
 curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"force_passive","cluster_group":"geo_dc","management_group":"DC1"}'
-
-# Re-enable DC1 under normal management after maintenance
-curl -X POST http://localhost:5080/api/v1/commands \
-  -H "Content-Type: application/json" \
-  -d '{"type":"reload","cluster_group":"geo_dc","management_group":"DC1"}'
 ```
 
 **Response codes:** `202 Accepted` — command queued; `409 Conflict` — blocked by current state; `400 Bad Request` — invalid parameters.
 
 **`promote` constraints (active-passive topology):**
-- Blocked if any other group has `actual=active` or `actual=starting` (services may still be running).
+- Blocked if any sibling has `managed=false` and `actual=active` or `actual=starting` (unmanaged active group cannot be drained; use `force_passive` first).
 - Not applicable in active-active topology (all groups have equal priority).
 
+**`demote` constraints:**
+- Blocked if any group in the cluster group has `actual=starting` or `actual=stopping` (cluster is transitioning).
+- Blocked if no passive managed group with `health=ok` is available as replacement.
+- Passes without further checks when the target group already has `desired=passive`.
+
 **`force_passive` constraints:**
-- Blocked if `managed=true` — the group is under normal management; use `reload` instead.
+- Blocked if `managed=true` — the group is under normal management; use `demote` instead.
 - Blocked if `desired=passive` — services are already targeted to be passive.
 
 **Switchover consistency:** the controller uses a two-phase approach — it waits for the stopping group to reach `actual=passive|failed` before activating the target. Wait timeout is derived from role timeouts: `max(check_interval + converge + exec)` across the group's roles.
@@ -315,7 +325,7 @@ The single-page dashboard connects to `/api/v1/stream` via `EventSource` and upd
 - Registry and session status of all connected agents.
 
 Not yet implemented in UI:
-- Command controls (promote, disable, force_passive, reload)
+- Command controls (promote, demote, disable, enable, force_passive)
 - Config editor
 - History and diff view
 - Authentication / access control
@@ -341,7 +351,7 @@ Not yet implemented in UI:
 - `--disable-api` / `--disable-controller` CLI flags (unsafe zone support)
 - JSON API (`/api/v1/state`)
 - SSE live-update stream (`/api/v1/stream`)
-- Command API (`/api/v1/commands`) — `promote`, `disable`, `enable`, `reload`, `force_passive` with leader-side consumer
+- Command API (`/api/v1/commands`) — `promote`, `demote`, `disable`, `enable`, `force_passive` with leader-side consumer
 
 ### Partially Implemented
 - Draft Web UI — live state monitoring only

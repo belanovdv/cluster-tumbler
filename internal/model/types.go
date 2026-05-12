@@ -81,10 +81,10 @@ type LeadershipDocument struct {
 type CommandType string
 
 const (
-	CommandTypePromote      CommandType = "promote"       // swap priorities so target becomes highest-priority
+	CommandTypePromote      CommandType = "promote"       // swap priorities so target becomes highest-priority; controller runs two-phase switchover
+	CommandTypeDemote       CommandType = "demote"        // strip active group of priority; auto-selects best passive replacement; or re-triggers convergence if already passive
 	CommandTypeDisable      CommandType = "disable"       // set managed=false, preserving current desired state
 	CommandTypeEnable       CommandType = "enable"        // set managed=true, preserving current desired state
-	CommandTypeReload       CommandType = "reload"        // clear failed state, attempt passive convergence
 	CommandTypeForcePassive CommandType = "force_passive" // force-stop services on a group with managed=false
 )
 

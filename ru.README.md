@@ -58,7 +58,7 @@
 | `active` | Группа должна быть активна |
 | `passive` | Группа должна быть пассивна (резерв) |
 
-Дополнительный булев флаг `managed` определяет, находится ли группа под управлением контроллера. Когда `false` (умолчание при bootstrap), контроллер пропускает группу, а воркеры ролей работают в режиме только наблюдения — группа отслеживается, но не управляется. Когда `true`, группа находится под нормальным управлением. Используйте `disable` для установки `managed=false`; `enable`, `force_passive` или `reload` — для восстановления `managed=true`.
+Дополнительный булев флаг `managed` определяет, находится ли группа под управлением контроллера. Когда `false` (умолчание при bootstrap), контроллер пропускает группу, а воркеры ролей работают в режиме только наблюдения — группа отслеживается, но не управляется. Когда `true`, группа находится под нормальным управлением. Используйте `disable` для установки `managed=false`; `enable` или `force_passive` — для восстановления `managed=true`.
 
 **Actual** — наблюдаемое агрегированное состояние всех ролей в группе:
 `active` · `passive` · `starting` · `stopping` · `failed`
@@ -251,21 +251,31 @@ go run ./cmd/main.go --config config.yaml \
 
 ### POST /api/v1/commands
 
-Поддерживаются пять типов команд:
+Поддерживается пять типов команд:
 
 | Тип | Действие |
 |---|---|
 | `promote` | Обмен приоритетами — целевая группа становится наивысшего приоритета; контроллер выполняет двухфазное переключение |
+| `demote` | Снятие наивысшего приоритета с указанной активной группы; автоматически выбирает лучшего пассивного кандидата (`managed=true`, `actual=passive`, `health=ok`, наивысший приоритет) и инициирует переключение. Если группа уже имеет `desired=passive`, запускает повторную passive-конвергенцию |
 | `disable` | Установка `managed=false`, сохраняя текущее `desired` — вывод группы из зоны управления; воркеры переходят в режим только наблюдения |
 | `enable` | Установка `managed=true`, сохраняя текущее `desired` — возврат группы под нормальное управление; обратная операция к `disable` |
-| `reload` | Запись `desired=passive, managed=true` — сброс состояния `failed` и запуск повторной passive-конвергенции |
 | `force_passive` | Требует `managed=false` и `desired=active`; записывает `desired=passive, managed=true` — воркеры выполняют `set_passive` и останавливают сервисы перед повторным включением в пул |
 
 ```bash
-# Продвинуть DC2 на высший приоритет (failover)
+# Продвинуть DC2 на высший приоритет (failover на конкретный узел)
 curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"promote","cluster_group":"geo_dc","management_group":"DC2"}'
+
+# Снять DC1 с активной роли (контроллер сам выберет замену)
+curl -X POST http://localhost:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"demote","cluster_group":"geo_dc","management_group":"DC1"}'
+
+# Повторно запустить passive-конвергенцию на зависшей пассивной группе
+curl -X POST http://localhost:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"demote","cluster_group":"geo_dc","management_group":"DC1"}'
 
 # Вывести DC1 на обслуживание
 curl -X POST http://localhost:5080/api/v1/commands \
@@ -281,21 +291,21 @@ curl -X POST http://localhost:5080/api/v1/commands \
 curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"force_passive","cluster_group":"geo_dc","management_group":"DC1"}'
-
-# Сбросить DC1 после устранения неисправности
-curl -X POST http://localhost:5080/api/v1/commands \
-  -H "Content-Type: application/json" \
-  -d '{"type":"reload","cluster_group":"geo_dc","management_group":"DC1"}'
 ```
 
 **Коды ответа:** `202 Accepted` — команда принята; `409 Conflict` — заблокирована текущим состоянием; `400 Bad Request` — некорректные параметры.
 
 **Ограничения `promote` (active-passive топология):**
-- Заблокирован, если любая другая группа имеет `actual=active` или `actual=starting` (сервисы могут ещё работать).
+- Заблокирован, если смежная группа имеет `managed=false` и `actual=active` или `actual=starting` (неуправляемую активную группу нельзя остановить контроллером; сначала выполните `force_passive`).
 - Не применим в active-active топологии (все группы имеют одинаковый приоритет).
 
+**Ограничения `demote`:**
+- Заблокирован, если любая группа в кластерной группе имеет `actual=starting` или `actual=stopping` (кластер в процессе перехода).
+- Заблокирован, если нет доступного пассивного управляемого кандидата с `health=ok`.
+- Проходит без дополнительных проверок, если целевая группа уже имеет `desired=passive`.
+
 **Ограничения `force_passive`:**
-- Заблокирован, если `managed=true` — группа под нормальным управлением; используйте `reload`.
+- Заблокирован, если `managed=true` — группа под нормальным управлением; используйте `demote`.
 - Заблокирован, если `desired=passive` — сервисы уже переводятся в пассивный режим.
 
 **Консистентность переключения:** контроллер использует двухфазный подход — ожидает перехода останавливаемой группы в `actual=passive|failed` перед активацией целевой. Таймаут ожидания вычисляется из таймаутов ролей: `max(check_interval + converge + exec)` по всем ролям группы.
@@ -315,7 +325,7 @@ curl -X POST http://localhost:5080/api/v1/commands \
 - Статус регистрации и сессий всех подключённых агентов.
 
 В UI не реализовано:
-- Элементы управления командами (promote, disable, enable, force_passive, reload)
+- Элементы управления командами (promote, demote, disable, enable, force_passive)
 - Редактор конфигурации
 - Просмотр истории и diff
 - Аутентификация / контроль доступа
@@ -341,7 +351,7 @@ curl -X POST http://localhost:5080/api/v1/commands \
 - Флаги `--disable-api` / `--disable-controller` (поддержка небезопасных зон)
 - JSON API (`/api/v1/state`)
 - SSE live-update поток (`/api/v1/stream`)
-- API команд управления (`/api/v1/commands`) — `promote`, `disable`, `enable`, `reload`, `force_passive` с потребителем на стороне лидера
+- API команд управления (`/api/v1/commands`) — `promote`, `demote`, `disable`, `enable`, `force_passive` с потребителем на стороне лидера
 
 ### Частично реализовано
 - Draft Web UI — только мониторинг состояния в реальном времени

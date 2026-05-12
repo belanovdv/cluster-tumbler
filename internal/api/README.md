@@ -15,7 +15,7 @@ Bearer token auth is optional: when `api.token` is empty all requests pass throu
 
 ### Command validation (`POST /api/v1/commands`)
 
-The handler validates the `type` field (must be `promote`, `disable`, `enable`, `reload`, or `force_passive`) and the required `cluster_group` / `management_group` fields.
+The handler validates the `type` field (must be `promote`, `demote`, `disable`, `enable`, or `force_passive`) and the required `cluster_group` / `management_group` fields.
 
 For `enable`, `validateEnable` checks:
 - target group already has `managed=true` → `409`
@@ -23,6 +23,12 @@ For `enable`, `validateEnable` checks:
 For `promote`, `validatePromote` additionally checks:
 - active-active topology (all groups equal priority) → `400`
 - any sibling group has `managed=false` and `actual=active` or `actual=starting` → `409` (unmanaged active group cannot be drained by the controller; use `force_passive` first)
+
+For `demote`, `validateDemote` checks:
+- target group not found → `400`
+- target has `desired=passive` → passes immediately (convergence reset, no further checks)
+- any group in the cluster group has `actual=starting` or `actual=stopping` → `409` (cluster is transitioning)
+- no passive managed group with `health=ok` available as replacement → `409`
 
 For `force_passive`, `validateForcePassive` checks:
 - target group has `managed=true` → `409`

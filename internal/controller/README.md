@@ -24,10 +24,10 @@ Leader-only reconciliation loop and command consumer. Both run only while this n
 
 | Command | Action |
 |---|---|
-| `promote` | Swaps priorities so the target group becomes highest-priority; controller applies switchover on next reconcile |
-| `disable` | Sets `managed=false` on the group, preserving the current `desired` state; controller and worker stop managing it |
+| `promote` | Swaps priorities so the target group becomes highest-priority; controller applies two-phase switchover on next reconcile |
+| `demote` | Strips the specified active group of priority; auto-selects the best passive replacement (`managed=true`, `actual=passive`, `health=ok`, highest priority), swaps priorities, writes `desired=passive` to the demoted group and `desired=active` to the replacement. If the group already has `desired=passive`, re-triggers passive convergence instead |
+| `disable` | Sets `managed=false` on the group, preserving the current `desired` state; controller and workers stop managing it |
 | `enable` | Sets `managed=true`, preserving the current `desired` state; returns the group to normal management — inverse of `disable` |
-| `reload` | Writes `desired=passive, managed=true`; role workers re-attempt passive convergence |
 | `force_passive` | Requires `managed=false` and `desired=active`; writes `desired=passive, managed=true` to re-enter managed pool via passive convergence |
 
 Each command transitions through `pending → running → completed|failed` and is archived to `commands_history/{id}`.

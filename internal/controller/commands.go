@@ -1,4 +1,4 @@
-// commands.go implements the leader-side command consumer: reads commands/ queue and executes promote, disable, reload, and force_passive.
+// commands.go implements the leader-side command consumer: reads commands/ queue and executes promote, demote, disable, enable, and force_passive.
 package controller
 
 import (
@@ -98,12 +98,12 @@ func (cc *CommandConsumer) processCommand(ctx context.Context, cmd model.Command
 	switch cmd.Type {
 	case model.CommandTypePromote:
 		execErr = cc.execPromote(ctx, cmd)
+	case model.CommandTypeDemote:
+		execErr = cc.execDemote(ctx, cmd)
 	case model.CommandTypeDisable:
 		execErr = cc.execDisable(ctx, cmd)
 	case model.CommandTypeEnable:
 		execErr = cc.execEnable(ctx, cmd)
-	case model.CommandTypeReload:
-		execErr = cc.execReload(ctx, cmd)
 	case model.CommandTypeForcePassive:
 		execErr = cc.execForcePassive(ctx, cmd)
 	default:
@@ -222,9 +222,105 @@ func (cc *CommandConsumer) execEnable(ctx context.Context, cmd model.Command) er
 	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, currentState, true)
 }
 
-// execReload writes desired=passive, managed=true, triggering fresh passive convergence.
-func (cc *CommandConsumer) execReload(ctx context.Context, cmd model.Command) error {
-	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive, true)
+// execDemote handles two cases:
+//   - desired=passive: re-triggers passive convergence (equivalent to former reload).
+//   - desired=active: auto-selects the best passive replacement (managed=true, actual=passive,
+//     health=ok, highest priority), swaps priorities, writes desired=passive to the demoted
+//     group and desired=active to the replacement. The controller's two-phase switchover then
+//     waits for the demoted group to reach actual=passive before activating the replacement.
+func (cc *CommandConsumer) execDemote(ctx context.Context, cmd model.Command) error {
+	raw, ok := cc.store.Get(model.Desired(cc.clusterID, cmd.ClusterGroup, cmd.ManagementGroup))
+	if !ok {
+		return fmt.Errorf("desired state not found for %s/%s", cmd.ClusterGroup, cmd.ManagementGroup)
+	}
+	var desiredDoc model.DesiredDocument
+	if err := json.Unmarshal(raw, &desiredDoc); err != nil {
+		return fmt.Errorf("failed to decode desired state: %w", err)
+	}
+
+	if desiredDoc.State == model.DesiredPassive {
+		return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive, true)
+	}
+
+	// Find best replacement: managed=true, actual=passive, health=ok, lowest priority number.
+	type candidate struct {
+		mg       string
+		priority int
+	}
+	var best *candidate
+
+	for _, mg := range cc.store.ListChildren(model.ClusterGroup(cc.clusterID, cmd.ClusterGroup)) {
+		if mg == cmd.ManagementGroup {
+			continue
+		}
+		desRaw, ok := cc.store.Get(model.Desired(cc.clusterID, cmd.ClusterGroup, mg))
+		if !ok {
+			continue
+		}
+		var des model.DesiredDocument
+		if err := json.Unmarshal(desRaw, &des); err != nil || !des.Managed {
+			continue
+		}
+		actRaw, ok := cc.store.Get(model.Actual(cc.clusterID, cmd.ClusterGroup, mg))
+		if !ok {
+			continue
+		}
+		var act model.ActualDocument
+		if err := json.Unmarshal(actRaw, &act); err != nil || act.State != model.ActualPassive {
+			continue
+		}
+		healthRaw, ok := cc.store.Get(model.Health(cc.clusterID, cmd.ClusterGroup, mg))
+		if !ok {
+			continue
+		}
+		var h model.HealthDocument
+		if err := json.Unmarshal(healthRaw, &h); err != nil || h.Status != model.HealthOK {
+			continue
+		}
+		cfgRaw, ok := cc.store.Get(model.ManagementGroupConfig(cc.clusterID, cmd.ClusterGroup, mg))
+		if !ok {
+			continue
+		}
+		var cfg model.ManagementGroupConfigDocument
+		if err := json.Unmarshal(cfgRaw, &cfg); err != nil {
+			continue
+		}
+		if best == nil || cfg.Priority < best.priority {
+			best = &candidate{mg: mg, priority: cfg.Priority}
+		}
+	}
+
+	if best == nil {
+		return fmt.Errorf("no available passive managed group with health=ok in cluster group %q", cmd.ClusterGroup)
+	}
+
+	demotedCfgRaw, ok := cc.store.Get(model.ManagementGroupConfig(cc.clusterID, cmd.ClusterGroup, cmd.ManagementGroup))
+	if !ok {
+		return fmt.Errorf("config not found for %s", cmd.ManagementGroup)
+	}
+	var demotedCfg model.ManagementGroupConfigDocument
+	if err := json.Unmarshal(demotedCfgRaw, &demotedCfg); err != nil {
+		return fmt.Errorf("failed to decode config for %s: %w", cmd.ManagementGroup, err)
+	}
+
+	if err := cc.writePriority(ctx, cmd.ClusterGroup, best.mg, demotedCfg.Priority); err != nil {
+		return fmt.Errorf("writing priority for %s: %w", best.mg, err)
+	}
+	if err := cc.writePriority(ctx, cmd.ClusterGroup, cmd.ManagementGroup, best.priority); err != nil {
+		return fmt.Errorf("writing priority for %s: %w", cmd.ManagementGroup, err)
+	}
+	if err := cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, model.DesiredPassive, true); err != nil {
+		return fmt.Errorf("writing desired for %s: %w", cmd.ManagementGroup, err)
+	}
+	if err := cc.writeDesired(ctx, cmd.ClusterGroup, best.mg, model.DesiredActive, true); err != nil {
+		return fmt.Errorf("writing desired for %s: %w", best.mg, err)
+	}
+
+	cc.log.Info("demote: switchover initiated",
+		zap.String("demoted", cmd.ManagementGroup), zap.Int("new_priority", best.priority),
+		zap.String("replacement", best.mg), zap.Int("new_priority", demotedCfg.Priority),
+	)
+	return nil
 }
 
 // execForcePassive transfers a managed=false group with desired=active to desired=passive,
