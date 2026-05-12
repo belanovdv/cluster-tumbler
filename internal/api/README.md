@@ -22,7 +22,7 @@ For `enable`, `validateEnable` checks:
 
 For `promote`, `validatePromote` additionally checks:
 - active-active topology (all groups equal priority) → `400`
-- any sibling group has `actual=active` or `actual=starting` → `409` (services may still be running)
+- any sibling group has `managed=false` and `actual=active` or `actual=starting` → `409` (unmanaged active group cannot be drained by the controller; use `force_passive` first)
 
 For `force_passive`, `validateForcePassive` checks:
 - target group has `managed=true` → `409`

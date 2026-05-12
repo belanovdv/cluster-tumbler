@@ -22,7 +22,7 @@ Bearer-токен аутентификация опциональна: если 
 
 Для `promote` дополнительно выполняется `validatePromote`:
 - active-active топология (все группы имеют одинаковый приоритет) → `400`
-- любая смежная группа имеет `actual=active` или `actual=starting` → `409` (сервисы могут ещё работать)
+- любая смежная группа имеет `managed=false` и `actual=active` или `actual=starting` → `409` (неуправляемую активную группу контроллер не может остановить; сначала выполните `force_passive`)
 
 Для `force_passive` выполняется `validateForcePassive`:
 - целевая группа имеет `managed=true` → `409`

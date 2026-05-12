@@ -247,6 +247,7 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 	type mgInfo struct {
 		priority int
 		desired  model.DesiredState
+		managed  bool
 		actual   model.ActualState
 		hasCfg   bool
 	}
@@ -268,6 +269,7 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 			var doc model.DesiredDocument
 			if json.Unmarshal(raw, &doc) == nil {
 				info.desired = doc.State
+				info.managed = doc.Managed
 			}
 		}
 
@@ -309,14 +311,17 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 		return http.StatusBadRequest, "promote is not applicable: all management groups have equal priority (active-active topology)"
 	}
 
-	// Block promote if any sibling group has services actively running.
+	// Block promote only if a sibling with managed=false is actively running —
+	// the controller cannot drain it, so promoting would risk a split-brain.
+	// Siblings with managed=true and actual=active are handled by the controller's
+	// two-phase switchover after the priority swap is committed.
 	for mg, info := range infos {
 		if mg == managementGroup {
 			continue
 		}
-		if info.actual == model.ActualActive || info.actual == model.ActualStarting {
+		if !info.managed && (info.actual == model.ActualActive || info.actual == model.ActualStarting) {
 			return http.StatusConflict, fmt.Sprintf(
-				"cannot promote %q: management group %q has actual=%s (services may still be active)",
+				"cannot promote %q: management group %q is unmanaged (managed=false) with actual=%s — stop it manually or run force_passive first",
 				managementGroup, mg, info.actual,
 			)
 		}
