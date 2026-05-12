@@ -100,6 +100,8 @@ func (cc *CommandConsumer) processCommand(ctx context.Context, cmd model.Command
 		execErr = cc.execPromote(ctx, cmd)
 	case model.CommandTypeDisable:
 		execErr = cc.execDisable(ctx, cmd)
+	case model.CommandTypeEnable:
+		execErr = cc.execEnable(ctx, cmd)
 	case model.CommandTypeReload:
 		execErr = cc.execReload(ctx, cmd)
 	case model.CommandTypeForcePassive:
@@ -206,6 +208,18 @@ func (cc *CommandConsumer) execDisable(ctx context.Context, cmd model.Command) e
 		}
 	}
 	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, currentState, true)
+}
+
+// execEnable clears disable_control, restoring the group to normal management while preserving the current desired state.
+func (cc *CommandConsumer) execEnable(ctx context.Context, cmd model.Command) error {
+	currentState := model.DesiredPassive
+	if raw, ok := cc.store.Get(model.Desired(cc.clusterID, cmd.ClusterGroup, cmd.ManagementGroup)); ok {
+		var doc model.DesiredDocument
+		if err := json.Unmarshal(raw, &doc); err == nil {
+			currentState = doc.State
+		}
+	}
+	return cc.writeDesired(ctx, cmd.ClusterGroup, cmd.ManagementGroup, currentState, false)
 }
 
 // execReload clears failed state by writing desired=passive, disable_control=false, triggering fresh convergence.

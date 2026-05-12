@@ -15,7 +15,10 @@ Bearer token auth is optional: when `api.token` is empty all requests pass throu
 
 ### Command validation (`POST /api/v1/commands`)
 
-The handler validates the `type` field (must be `promote`, `disable`, `reload`, or `force_passive`) and the required `cluster_group` / `management_group` fields.
+The handler validates the `type` field (must be `promote`, `disable`, `enable`, `reload`, or `force_passive`) and the required `cluster_group` / `management_group` fields.
+
+For `enable`, `validateEnable` checks:
+- target group already has `disable_control=false` → `409`
 
 For `promote`, `validatePromote` additionally checks:
 - active-active topology (all groups equal priority) → `400`

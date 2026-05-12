@@ -150,7 +150,7 @@ func (s *Server) handleState(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-// handleCommands accepts management commands (promote, disable, reload, idle_drain) and enqueues them for the leader consumer.
+// handleCommands accepts management commands and enqueues them for the leader consumer.
 func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -170,10 +170,10 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 
 	cmdType := model.CommandType(req.Type)
 	switch cmdType {
-	case model.CommandTypePromote, model.CommandTypeDisable, model.CommandTypeReload, model.CommandTypeForcePassive:
+	case model.CommandTypePromote, model.CommandTypeDisable, model.CommandTypeEnable, model.CommandTypeReload, model.CommandTypeForcePassive:
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": fmt.Sprintf("unknown command type %q; valid types: promote, disable, reload, force_passive", req.Type),
+			"error": fmt.Sprintf("unknown command type %q; valid types: promote, disable, enable, reload, force_passive", req.Type),
 		})
 		return
 	}
@@ -185,6 +185,13 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 
 	if cmdType == model.CommandTypePromote {
 		if code, msg := s.validatePromote(req.ClusterGroup, req.ManagementGroup); code != 0 {
+			writeJSON(w, code, map[string]string{"error": msg})
+			return
+		}
+	}
+
+	if cmdType == model.CommandTypeEnable {
+		if code, msg := s.validateEnable(req.ClusterGroup, req.ManagementGroup); code != 0 {
 			writeJSON(w, code, map[string]string{"error": msg})
 			return
 		}
@@ -315,6 +322,23 @@ func (s *Server) validatePromote(clusterGroup, managementGroup string) (int, str
 		}
 	}
 
+	return 0, ""
+}
+
+// validateEnable checks that the target group has disable_control=true.
+// Returns (0, "") if valid; (httpStatusCode, errorMessage) if blocked.
+func (s *Server) validateEnable(clusterGroup, managementGroup string) (int, string) {
+	raw, ok := s.store.Get(model.Desired(s.clusterID, clusterGroup, managementGroup))
+	if !ok {
+		return http.StatusBadRequest, fmt.Sprintf("management group %q not found in cluster group %q", managementGroup, clusterGroup)
+	}
+	var doc model.DesiredDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return http.StatusInternalServerError, "failed to read desired state"
+	}
+	if !doc.DisableControl {
+		return http.StatusConflict, fmt.Sprintf("group %q is already under normal management (disable_control=false)", managementGroup)
+	}
 	return 0, ""
 }
 

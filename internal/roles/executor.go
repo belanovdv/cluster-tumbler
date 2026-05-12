@@ -43,7 +43,7 @@ func (e *RoleExecutor) build(req RoleRequest, name ActorName, cmd []string) Acto
 func (e *RoleExecutor) forceStop(ctx context.Context, req RoleRequest) RoleStatus {
 	cmd, ok := e.Actors[ForceStop]
 	if !ok {
-		return success("idle", ActorResult{})
+		return success("passive", ActorResult{})
 	}
 
 	res := e.Runner.Run(ctx, e.build(req, ForceStop, cmd), 1)
@@ -53,7 +53,7 @@ func (e *RoleExecutor) forceStop(ctx context.Context, req RoleRequest) RoleStatu
 	}
 
 	if res.OK {
-		return success("idle", res)
+		return success("passive", res)
 	}
 
 	return failedActor(res)

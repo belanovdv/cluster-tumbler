@@ -13,7 +13,6 @@ const (
 type ActualState string
 
 const (
-	ActualIdle     ActualState = "idle"
 	ActualActive   ActualState = "active"
 	ActualPassive  ActualState = "passive"
 	ActualStarting ActualState = "starting"
@@ -82,9 +81,10 @@ type LeadershipDocument struct {
 type CommandType string
 
 const (
-	CommandTypePromote     CommandType = "promote"      // swap priorities so target becomes highest-priority
-	CommandTypeDisable     CommandType = "disable"      // set disable_control=true, preserving current desired state
-	CommandTypeReload      CommandType = "reload"       // clear failed state, attempt passive convergence
+	CommandTypePromote      CommandType = "promote"       // swap priorities so target becomes highest-priority
+	CommandTypeDisable      CommandType = "disable"       // set disable_control=true, preserving current desired state
+	CommandTypeEnable       CommandType = "enable"        // clear disable_control=true, preserving current desired state
+	CommandTypeReload       CommandType = "reload"        // clear failed state, attempt passive convergence
 	CommandTypeForcePassive CommandType = "force_passive" // force-stop services on a group with disable_control=true
 )
 

@@ -452,8 +452,6 @@ func toActualState(state string) model.ActualState {
 		return model.ActualActive
 	case string(model.ActualPassive):
 		return model.ActualPassive
-	case string(model.ActualIdle):
-		return model.ActualIdle
 	case string(model.ActualStarting):
 		return model.ActualStarting
 	case string(model.ActualStopping):

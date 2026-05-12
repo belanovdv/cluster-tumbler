@@ -42,7 +42,7 @@ const pageHTML = `<!doctype html>
   --soft:#f7f8fb;
   --selected:#eef1f7;
 
-  --idle:#e5e7eb;
+  --grey:#e5e7eb;
   --active:#d8f5df;
   --passive:#fff0c2;
   --starting:#dbeafe;
@@ -219,7 +219,6 @@ body {
   color:#394150;
 }
 
-.state-idle { background:var(--idle); }
 .state-active { background:var(--active); }
 .state-passive { background:var(--passive); }
 .state-starting { background:var(--starting); }
@@ -231,12 +230,12 @@ body {
 .health-failed { background:var(--failed); }
 
 .disabled-control .badge {
-  background:var(--idle);
+  background:var(--grey);
   color:var(--muted);
 }
 
 .ctrl-badge-disabled {
-  background:var(--idle);
+  background:var(--grey);
   color:var(--muted);
 }
 

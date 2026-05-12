@@ -154,15 +154,14 @@ func (c *Controller) reconcileManagementGroup(
 		seenPassive  bool
 		seenStarting bool
 		seenStopping bool
-		seenIdle     bool
 
 		latestStartingAt time.Time
 		latestStoppingAt time.Time
 	)
 
-	actualState := model.ActualIdle
-	healthStatus := model.HealthWarning
-	details := "empty management group"
+	actualState := model.ActualPassive
+	healthStatus := model.HealthOK
+	details := ""
 
 	if !disableControl {
 		missing := c.missingExpectedRoleStates(clusterGroup, managementGroup)
@@ -222,8 +221,6 @@ func (c *Controller) reconcileManagementGroup(
 					latestStoppingAt = actual.UpdatedAt
 				}
 
-			case model.ActualIdle:
-				seenIdle = true
 			}
 
 			if actualState == model.ActualFailed {
@@ -235,9 +232,9 @@ func (c *Controller) reconcileManagementGroup(
 	if actualState != model.ActualFailed {
 		switch {
 		case !seenRoles:
-			actualState = model.ActualIdle
-			healthStatus = model.HealthWarning
-			details = "empty management group"
+			actualState = model.ActualPassive
+			healthStatus = model.HealthOK
+			details = ""
 
 		case seenStarting || seenStopping:
 			healthStatus = model.HealthWarning
@@ -256,11 +253,6 @@ func (c *Controller) reconcileManagementGroup(
 				actualState = model.ActualStopping
 				details = "one or more roles are stopping"
 			}
-
-		case seenIdle:
-			actualState = model.ActualIdle
-			healthStatus = model.HealthWarning
-			details = "one or more roles are not stable"
 
 		case seenActive && !seenPassive:
 			actualState = model.ActualActive
@@ -530,7 +522,7 @@ func (c *Controller) applyPriorityPolicy(
 			}
 		}
 
-		if curActual != model.ActualPassive && curActual != model.ActualFailed && curActual != model.ActualIdle {
+		if curActual != model.ActualPassive && curActual != model.ActualFailed {
 			if err := c.writeDesiredIfChanged(ctx, clusterGroup, currentActive, model.DesiredPassive); err != nil {
 				return err
 			}

@@ -26,6 +26,7 @@ Leader-only reconciliation loop and command consumer. Both run only while this n
 |---|---|
 | `promote` | Swaps priorities so the target group becomes highest-priority; controller applies switchover on next reconcile |
 | `disable` | Sets `disable_control=true` on the group, preserving the current `desired` state; controller and worker stop managing it |
+| `enable` | Clears `disable_control`, preserving the current `desired` state; returns the group to normal management — inverse of `disable` |
 | `reload` | Writes `desired=passive, disable_control=false`; role workers re-attempt passive convergence |
 | `force_passive` | Requires `disable_control=true` and `desired=active`; writes `desired=passive, disable_control=false` to re-enter managed pool via passive convergence |
 

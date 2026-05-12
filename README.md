@@ -57,10 +57,11 @@ Examples (instance scenario): `rabbitmq/node1`, `rabbitmq/node2`
 |---|---|
 | `active` | Group should be active |
 | `passive` | Group should be passive (standby) |
-| `idle` | Group in maintenance / unconfigured |
+
+An additional boolean flag `disable_control` can be set on a desired document. When `true`, the controller skips the group entirely and role workers run in probe-only mode (no convergence). The group is observed but not managed. Use the `disable` command to set this flag; use `force_passive` or `reload` to clear it.
 
 **Actual** — the observed aggregate state of all roles in the group:
-`idle` · `starting` · `active` · `passive` · `stopping` · `failed`
+`active` · `passive` · `starting` · `stopping` · `failed`
 
 **Health**: `ok` · `warning` · `failed`
 
@@ -176,8 +177,8 @@ Actor commands accept both string (`"script.sh arg"`) and list (`["script.sh", "
   config/roles/{role_id}
   config/cluster_groups/{cg}/_meta
   config/cluster_groups/{cg}/{mg} # management group config (priority, roles)
-  commands/{command_id}           # command queue — producer side implemented
-  commands_history/{command_id}   # archived commands — consumer not yet implemented
+  commands/{command_id}           # pending/running command queue
+  commands_history/{command_id}   # archived completed/failed commands
   {cluster_group}/{mg}/desired
   {cluster_group}/{mg}/actual
   {cluster_group}/{mg}/health
@@ -206,7 +207,6 @@ If multiple groups share the best priority they all become `active` simultaneous
 | Mix of active and passive | `failed` | `failed` |
 | Any starting | `starting` | `warning` |
 | Any stopping | `stopping` | `warning` |
-| Any idle (no failed) | `idle` | `warning` |
 | Any failed | `failed` | `failed` |
 | Expected role keys missing | `failed` | `failed` |
 
@@ -251,13 +251,15 @@ All `/api/v1/*` endpoints accept an optional `Authorization: Bearer <token>` hea
 
 ### POST /api/v1/commands
 
-Three command types are supported:
+Four command types are supported:
 
 | Type | Action |
 |---|---|
 | `promote` | Swap priorities so the target group becomes highest-priority; controller performs two-phase switchover |
-| `disable` | Set `desired=idle` — take the group out of active management (maintenance mode) |
-| `reload` | Clear `failed` state and attempt passive convergence |
+| `disable` | Set `disable_control=true`, preserving the current `desired` state — removes the group from controller authority and switches role workers to probe-only mode |
+| `enable` | Clear `disable_control`, preserving the current `desired` state — returns the group to normal management; inverse of `disable` |
+| `reload` | Write `desired=passive, disable_control=false` — clears `failed` state and triggers fresh passive convergence |
+| `force_passive` | Requires `disable_control=true` and `desired=active`; writes `desired=passive, disable_control=false` so role workers run `set_passive` and bring services down before the group can be re-enabled |
 
 ```bash
 # Promote DC2 to highest priority (failover)
@@ -265,12 +267,22 @@ curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"promote","cluster_group":"geo_dc","management_group":"DC2"}'
 
-# Take DC1 out of rotation (maintenance)
+# Take DC1 out of rotation (maintenance mode)
 curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"disable","cluster_group":"geo_dc","management_group":"DC1"}'
 
-# Reset DC1 after failure investigation
+# Return DC1 to normal management (re-enable after maintenance)
+curl -X POST http://localhost:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"enable","cluster_group":"geo_dc","management_group":"DC1"}'
+
+# Gracefully stop services on a disabled-but-active DC1 before maintenance
+curl -X POST http://localhost:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"force_passive","cluster_group":"geo_dc","management_group":"DC1"}'
+
+# Re-enable DC1 under normal management after maintenance
 curl -X POST http://localhost:5080/api/v1/commands \
   -H "Content-Type: application/json" \
   -d '{"type":"reload","cluster_group":"geo_dc","management_group":"DC1"}'
@@ -279,8 +291,12 @@ curl -X POST http://localhost:5080/api/v1/commands \
 **Response codes:** `202 Accepted` — command queued; `409 Conflict` — blocked by current state; `400 Bad Request` — invalid parameters.
 
 **`promote` constraints (active-passive topology):**
-- Blocked if any other group has `desired=idle` **and** `actual=active|starting` (services may still be running).
+- Blocked if any other group has `actual=active` or `actual=starting` (services may still be running).
 - Not applicable in active-active topology (all groups have equal priority).
+
+**`force_passive` constraints:**
+- Blocked if `disable_control=false` — the group is under normal management; use `reload` instead.
+- Blocked if `desired=passive` — services are already targeted to be passive.
 
 **Switchover consistency:** the controller uses a two-phase approach — it waits for the stopping group to reach `actual=passive|failed` before activating the target. Wait timeout is derived from role timeouts: `max(check_interval + converge + exec)` across the group's roles.
 
@@ -299,7 +315,7 @@ The single-page dashboard connects to `/api/v1/stream` via `EventSource` and upd
 - Registry and session status of all connected agents.
 
 Not yet implemented in UI:
-- Desired state control (active / passive / idle)
+- Command controls (promote, disable, force_passive, reload)
 - Config editor
 - History and diff view
 - Authentication / access control
@@ -325,7 +341,7 @@ Not yet implemented in UI:
 - `--disable-api` / `--disable-controller` CLI flags (unsafe zone support)
 - JSON API (`/api/v1/state`)
 - SSE live-update stream (`/api/v1/stream`)
-- Command API (`/api/v1/commands`) — `promote`, `disable`, `reload` with leader-side consumer
+- Command API (`/api/v1/commands`) — `promote`, `disable`, `enable`, `reload`, `force_passive` with leader-side consumer
 
 ### Partially Implemented
 - Draft Web UI — live state monitoring only
