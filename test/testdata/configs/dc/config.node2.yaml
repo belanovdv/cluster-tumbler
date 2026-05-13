@@ -38,7 +38,7 @@ node:
 management_groups:
   geo_dc:
     DC2:
-      priority: 1
+      priority: 2
       roles:
         - core
         - mc

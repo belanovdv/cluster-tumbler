@@ -57,10 +57,11 @@ Examples (instance scenario): `rabbitmq/node1`, `rabbitmq/node2`
 |---|---|
 | `active` | Group should be active |
 | `passive` | Group should be passive (standby) |
-| `idle` | Group in maintenance / unconfigured |
+
+An additional boolean flag `managed` controls whether the group is under controller authority. When `false` (default at bootstrap), the controller skips the group and role workers run in probe-only mode — the group is observed but not controlled. When `true`, the controller manages the group normally. Use `disable` to set `managed=false`; use `enable` or `force_passive` to restore `managed=true`.
 
 **Actual** — the observed aggregate state of all roles in the group:
-`idle` · `starting` · `active` · `passive` · `stopping` · `failed`
+`active` · `passive` · `starting` · `stopping` · `failed`
 
 **Health**: `ok` · `warning` · `failed`
 
@@ -116,7 +117,7 @@ node:
   name: "Node 1"
   actors_base_dir: "."    # base directory for relative actor paths
   disable_api: false        # set true to suppress HTTP API and Web UI on this node
-  disable_controller: false # set true to exclude this node from leader election
+  managedler: false # set true to exclude this node from leader election
 
   memberships:
     - cluster_group: geo_dc
@@ -153,14 +154,14 @@ Actor commands accept both string (`"script.sh arg"`) and list (`["script.sh", "
 
 ### Restricting a Node (Unsafe Zones)
 
-`node.disable_api` and `node.disable_controller` are intended for agents deployed in untrusted network zones. The corresponding CLI flags override the config file values at startup:
+`node.disable_api` and `node.managedler` are intended for agents deployed in untrusted network zones. The corresponding CLI flags override the config file values at startup:
 
 ```bash
 --disable-api         # do not start HTTP API and Web UI
 --disable-controller  # do not participate in leader election
 ```
 
-> **Warning:** Every node with `disable_controller: true` reduces the number of candidates for the controller role. If all nodes in a cluster have it set, automatic failover stops working entirely. Use these options only for nodes in untrusted zones where the security risk outweighs the redundancy benefit.
+> **Warning:** Every node with `managedler: true` reduces the number of candidates for the controller role. If all nodes in a cluster have it set, automatic failover stops working entirely. Use these options only for nodes in untrusted zones where the security risk outweighs the redundancy benefit.
 
 ---
 
@@ -176,8 +177,8 @@ Actor commands accept both string (`"script.sh arg"`) and list (`["script.sh", "
   config/roles/{role_id}
   config/cluster_groups/{cg}/_meta
   config/cluster_groups/{cg}/{mg} # management group config (priority, roles)
-  commands/{command_id}           # command queue — producer side implemented
-  commands_history/{command_id}   # archived commands — consumer not yet implemented
+  commands/{command_id}           # pending/running command queue
+  commands_history/{command_id}   # archived completed/failed commands
   {cluster_group}/{mg}/desired
   {cluster_group}/{mg}/actual
   {cluster_group}/{mg}/health
@@ -206,7 +207,6 @@ If multiple groups share the best priority they all become `active` simultaneous
 | Mix of active and passive | `failed` | `failed` |
 | Any starting | `starting` | `warning` |
 | Any stopping | `stopping` | `warning` |
-| Any idle (no failed) | `idle` | `warning` |
 | Any failed | `failed` | `failed` |
 | Expected role keys missing | `failed` | `failed` |
 
@@ -245,22 +245,69 @@ go run ./cmd/main.go --config config.yaml \
 |---|---|---|
 | `GET` | `/api/v1/state` | Full cluster state as pretty-printed JSON |
 | `GET` | `/api/v1/stream` | Server-Sent Events stream; pushes updated state on every etcd change |
-| `POST` | `/api/v1/commands` | Write a command document to etcd (producer only; consumer not yet implemented) |
+| `POST` | `/api/v1/commands` | Enqueue a management command; processed by the leader consumer |
 
 All `/api/v1/*` endpoints accept an optional `Authorization: Bearer <token>` header when `api.token` is configured.
 
 ### POST /api/v1/commands
 
-> **Partial implementation.** Writing a command document is supported. The leader-side processor that reads the queue, applies the desired state change, and archives the result is not yet implemented.
+Five command types are supported:
 
-```json
-{
-  "type": "set_desired",
-  "cluster_group": "geo_dc",
-  "management_group": "DC1",
-  "desired": "active"
-}
+| Type | Action |
+|---|---|
+| `promote` | Swap priorities so the target group becomes highest-priority; controller performs two-phase switchover |
+| `demote` | Strip the specified active group of priority; auto-selects the best passive replacement (`managed=true`, `actual=passive`, `health=ok`, highest priority) and initiates switchover. If the group already has `desired=passive`, re-triggers passive convergence instead |
+| `disable` | Set `managed=false`, preserving the current `desired` state — removes the group from controller authority and switches role workers to probe-only mode |
+| `enable` | Set `managed=true`, preserving the current `desired` state — returns the group to normal management; inverse of `disable` |
+| `force_passive` | Requires `managed=false` and `desired=active`; writes `desired=passive, managed=true` so role workers run `set_passive` and bring services down before the group can be re-enabled |
+
+```bash
+# Promote DC2 to highest priority (failover to specific target)
+curl -X POST http://localhost:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"promote","cluster_group":"geo_dc","management_group":"DC2"}'
+
+# Demote DC1 (controller auto-selects best passive replacement)
+curl -X POST http://localhost:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"demote","cluster_group":"geo_dc","management_group":"DC1"}'
+
+# Re-trigger passive convergence on a stuck passive group
+curl -X POST http://localhost:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"demote","cluster_group":"geo_dc","management_group":"DC1"}'
+
+# Take DC1 out of rotation (maintenance mode)
+curl -X POST http://localhost:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"disable","cluster_group":"geo_dc","management_group":"DC1"}'
+
+# Return DC1 to normal management (re-enable after maintenance)
+curl -X POST http://localhost:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"enable","cluster_group":"geo_dc","management_group":"DC1"}'
+
+# Gracefully stop services on a disabled-but-active DC1 before maintenance
+curl -X POST http://localhost:5080/api/v1/commands \
+  -H "Content-Type: application/json" \
+  -d '{"type":"force_passive","cluster_group":"geo_dc","management_group":"DC1"}'
 ```
+
+**Response codes:** `202 Accepted` — command queued; `409 Conflict` — blocked by current state; `400 Bad Request` — invalid parameters.
+
+**`promote` constraints:**
+- Blocked if any sibling has `managed=false` and `actual=active` or `actual=starting` (unmanaged active group cannot be drained; use `force_passive` first).
+
+**`demote` constraints:**
+- Blocked if any group in the cluster group has `actual=starting` or `actual=stopping` (cluster is transitioning).
+- Blocked if no passive managed group with `health=ok` is available as replacement.
+- Passes without further checks when the target group already has `desired=passive`.
+
+**`force_passive` constraints:**
+- Blocked if `managed=true` — the group is under normal management; use `demote` instead.
+- Blocked if `desired=passive` — services are already targeted to be passive.
+
+**Switchover consistency:** the controller uses a two-phase approach — it waits for the stopping group to reach `actual=passive|failed` before activating the target. Wait timeout is derived from role timeouts: `max(check_interval + converge + exec)` across the group's roles.
 
 ---
 
@@ -277,7 +324,7 @@ The single-page dashboard connects to `/api/v1/stream` via `EventSource` and upd
 - Registry and session status of all connected agents.
 
 Not yet implemented in UI:
-- Desired state control (active / passive / idle)
+- Command controls (promote, demote, disable, enable, force_passive)
 - Config editor
 - History and diff view
 - Authentication / access control
@@ -294,7 +341,8 @@ Not yet implemented in UI:
 - Registry / session lifecycle
 - Leadership election via etcd TTL lease
 - Controller state aggregation
-- Priority-based automatic failover
+- Priority-based failover with two-phase switchover (stops current active before starting new)
+- Automatic priority swap on failure (`failover_mode: automatic`)
 - Real actor execution (probe→set convergence loop with timeout and retry)
 - `roles.defaults` — base timeouts/actors shared across roles
 - `actors_base_dir` — configurable base directory for actor paths
@@ -302,15 +350,12 @@ Not yet implemented in UI:
 - `--disable-api` / `--disable-controller` CLI flags (unsafe zone support)
 - JSON API (`/api/v1/state`)
 - SSE live-update stream (`/api/v1/stream`)
-- Command producer API (`/api/v1/commands`)
+- Command API (`/api/v1/commands`) — `promote`, `demote`, `disable`, `enable`, `force_passive` with leader-side consumer
 
 ### Partially Implemented
-- Command queue — write side only; leader-side processor not implemented
 - Draft Web UI — live state monitoring only
 - Config watcher — detects etcd config changes but does not propagate to running workers
 
 ### Not Implemented
-- Command queue consumer (leader reads `commands/`, executes, archives to `commands_history/`)
 - Full Web UI (design, authentication, control elements — desired state, config editor, history/diff)
-- Auto failback policy
 - Anti-flapping logic — prevents the controller from rapidly toggling `desired` when a group's health oscillates; requires a stabilisation window before a failover decision is applied

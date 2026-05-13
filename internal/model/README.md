@@ -4,7 +4,11 @@ Domain types and etcd key scheme. No business logic.
 
 `types.go` — JSON-serializable document structs stored in etcd: desired/actual/health state, registration, session, leadership, config documents, and `Command`.
 
-`Command` / `CommandStatus` — producer side of a planned command queue. The intent is that any node (including non-leaders) can write a `Command` document to `commands/{id}` via the API; the leader then reads the queue, executes the command (e.g. changes `desired` of a management group), and moves the document to `commands_history/{id}`. **The consumer (queue processor) is not yet implemented.**
+`Command` / `CommandStatus` — command queue documents. Any node can write a `Command` to `commands/{id}` via the API; the leader's `CommandConsumer` reads the queue, executes the command, and archives it to `commands_history/{id}`.
+
+`DesiredDocument` carries two fields that together define management intent:
+- `state` — target state: `active` or `passive`
+- `managed` — when `true`, the group is under normal controller authority; when `false` (default), the controller skips the group and the role worker runs in probe-only mode (no convergence)
 
 `keys.go` — pure functions that construct etcd key paths. The key hierarchy is:
 ```

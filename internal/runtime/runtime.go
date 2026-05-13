@@ -32,6 +32,7 @@ type Runtime struct {
 	session    *lease.SessionManager
 	leader     *lease.LeadershipManager
 	controller *controller.Controller
+	consumer   *controller.CommandConsumer
 	roles      *roles.Manager
 }
 
@@ -97,6 +98,12 @@ func New(cfg *config.Config) (*Runtime, error) {
 			st,
 			etcdClient,
 			logging.WithComponent(baseLogger, "controller"),
+		),
+		consumer: controller.NewCommandConsumer(
+			cfg,
+			st,
+			etcdClient,
+			logging.WithComponent(baseLogger, "commands"),
 		),
 		roles: roles.New(
 			cfg,
@@ -241,6 +248,11 @@ func (r *Runtime) controllerWhenLeader(ctx context.Context) {
 				go func() {
 					if err := r.controller.Run(ctx); err != nil && err != context.Canceled {
 						r.log.Error("controller failed", zap.Error(err))
+					}
+				}()
+				go func() {
+					if err := r.consumer.Run(ctx); err != nil && err != context.Canceled {
+						r.log.Error("command consumer failed", zap.Error(err))
 					}
 				}()
 			}

@@ -6,7 +6,6 @@ import "time"
 type DesiredState string
 
 const (
-	DesiredIdle    DesiredState = "idle"
 	DesiredActive  DesiredState = "active"
 	DesiredPassive DesiredState = "passive"
 )
@@ -14,7 +13,6 @@ const (
 type ActualState string
 
 const (
-	ActualIdle     ActualState = "idle"
 	ActualActive   ActualState = "active"
 	ActualPassive  ActualState = "passive"
 	ActualStarting ActualState = "starting"
@@ -32,6 +30,7 @@ const (
 
 type DesiredDocument struct {
 	State     DesiredState `json:"state"`
+	Managed   bool         `json:"managed,omitempty"`
 	UpdatedAt time.Time    `json:"updated_at"`
 	Details   string       `json:"details,omitempty"`
 }
@@ -78,9 +77,18 @@ type LeadershipDocument struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// CommandStatus tracks processing stages for a queued command.
-// Producer (API) writes Pending; consumer (leader controller) advances the lifecycle.
-// The consumer is not yet implemented.
+// CommandType identifies the kind of management command issued via POST /api/v1/commands.
+type CommandType string
+
+const (
+	CommandTypePromote      CommandType = "promote"       // swap priorities so target becomes highest-priority; controller runs two-phase switchover
+	CommandTypeDemote       CommandType = "demote"        // strip active group of priority; auto-selects best passive replacement; or re-triggers convergence if already passive
+	CommandTypeDisable      CommandType = "disable"       // set managed=false, preserving current desired state
+	CommandTypeEnable       CommandType = "enable"        // set managed=true, preserving current desired state
+	CommandTypeForcePassive CommandType = "force_passive" // force-stop services on a group with managed=false
+)
+
+// CommandStatus tracks the lifecycle stages of a queued command.
 type CommandStatus string
 
 const (
@@ -90,17 +98,13 @@ const (
 	CommandFailed    CommandStatus = "failed"
 )
 
-// Command is the document written to commands/{id} by any node via POST /api/v1/commands.
-// The leader is expected to read this queue, apply the requested desired-state change, and
-// archive the document to commands_history/{id}. Queue processing is not yet implemented.
+// Command is written to commands/{id} by POST /api/v1/commands and processed by the leader consumer.
 type Command struct {
 	ID              string        `json:"id"`
-	Type            string        `json:"type"`
+	Type            CommandType   `json:"type"`
 	ClusterGroup    string        `json:"cluster_group"`
 	ManagementGroup string        `json:"management_group"`
-	Desired         DesiredState  `json:"desired"`
 	Status          CommandStatus `json:"status"`
-	Owner           string        `json:"owner,omitempty"`
 	Error           string        `json:"error,omitempty"`
 	CreatedAt       time.Time     `json:"created_at"`
 	StartedAt       *time.Time    `json:"started_at,omitempty"`

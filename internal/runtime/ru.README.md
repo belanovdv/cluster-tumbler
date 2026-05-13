@@ -9,6 +9,6 @@
 4. `bootstrap.Ensure` — заполнение отсутствующих ключей etcd.
 5. Запуск `watchLoop` (горутина) — применяет события watch из etcd к хранилищу.
 6. Запуск `config.Watcher`, `lease.SessionManager`, `roles.Manager`, `lease.LeadershipManager` (горутины).
-7. `controllerWhenLeader` — запускает `controller.Controller` каждый раз при получении лидерства.
+7. `controllerWhenLeader` — запускает `controller.Controller` и `controller.CommandConsumer` каждый раз при получении лидерства.
 
 `putter.go` — `apiPutter` адаптирует `etcd.Client` к интерфейсу `api.Putter`, не создавая зависимости от `etcd` в пакете `api`.

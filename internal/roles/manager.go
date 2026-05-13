@@ -93,7 +93,9 @@ type Worker struct {
 	log        *zap.Logger
 
 	lastDesired model.DesiredState
-	lastCheckAt time.Time
+	lastManaged bool
+	lastActual         model.ActualState
+	lastCheckAt        time.Time
 
 	mu            sync.Mutex
 	desiredCancel context.CancelFunc
@@ -139,7 +141,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 
-func (w *Worker) readDesired() (model.DesiredState, bool) {
+func (w *Worker) readDesired() (model.DesiredState, bool, bool) {
 	key := model.Desired(
 		w.cfg.Cluster.ID,
 		w.membership.ClusterGroup,
@@ -148,7 +150,7 @@ func (w *Worker) readDesired() (model.DesiredState, bool) {
 
 	raw, ok := w.store.Get(key)
 	if !ok {
-		return "", false
+		return "", false, false
 	}
 
 	var doc model.DesiredDocument
@@ -158,15 +160,15 @@ func (w *Worker) readDesired() (model.DesiredState, bool) {
 			zap.String("key", key),
 			zap.Error(err),
 		)
-		return "", false
+		return "", false, false
 	}
 
-	return doc.State, true
+	return doc.State, doc.Managed, true
 }
 
-// reconcile decides whether to run desired execution: on desired change or when the check interval elapses.
+// reconcile decides whether to run desired execution: on desired/managed change or when the check interval elapses.
 func (w *Worker) reconcile(ctx context.Context) error {
-	desired, ok := w.readDesired()
+	desired, managed, ok := w.readDesired()
 	if !ok {
 		return nil
 	}
@@ -183,40 +185,32 @@ func (w *Worker) reconcile(ctx context.Context) error {
 		checkInterval = 5 * time.Second
 	}
 
-	if desired != w.lastDesired {
+	if desired != w.lastDesired || managed != w.lastManaged {
 		w.log.Debug(
 			"desired changed",
 			zap.String("desired", string(desired)),
 			zap.String("previous", string(w.lastDesired)),
+			zap.Bool("managed", managed),
 		)
 
 		w.lastDesired = desired
+		w.lastManaged = managed
 		w.lastCheckAt = now
 
-		w.startDesiredExecution(ctx, desired)
-		return nil
-	}
-
-	if desired == model.DesiredIdle {
+		w.startDesiredExecution(ctx, desired, managed)
 		return nil
 	}
 
 	if w.lastCheckAt.IsZero() || now.Sub(w.lastCheckAt) >= checkInterval {
-		w.log.Debug(
-			"running periodic role convergence check",
-			zap.String("desired", string(desired)),
-			zap.Duration("check_interval", checkInterval),
-		)
-
 		w.lastCheckAt = now
-		w.startDesiredExecution(ctx, desired)
+		w.startDesiredExecution(ctx, desired, managed)
 	}
 
 	return nil
 }
 
 // startDesiredExecution cancels any in-flight execution and starts a new goroutine for the given desired state.
-func (w *Worker) startDesiredExecution(parent context.Context, desired model.DesiredState) {
+func (w *Worker) startDesiredExecution(parent context.Context, desired model.DesiredState, managed bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -231,7 +225,7 @@ func (w *Worker) startDesiredExecution(parent context.Context, desired model.Des
 	go func() {
 		defer cancel()
 
-		w.applyDesired(ctx, desired)
+		w.applyDesired(ctx, desired, managed)
 	}()
 }
 
@@ -245,8 +239,8 @@ func (w *Worker) cancelCurrentDesired() {
 	}
 }
 
-// applyDesired waits for a session lease, builds the RoleExecutor, runs Reconcile, and writes the resulting status.
-func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
+// applyDesired waits for a session lease, builds the RoleExecutor, runs convergence or probe-only, and writes status.
+func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState, managed bool) {
 	if err := w.waitForSessionLease(ctx); err != nil {
 		w.log.Debug("session lease is not ready, skip role execution", zap.Error(err))
 		return
@@ -274,38 +268,33 @@ func (w *Worker) applyDesired(ctx context.Context, desired model.DesiredState) {
 		RetryInterval: roleCfg.Timeouts.RetryInterval.Duration,
 	}
 
-	w.log.Debug(
-		"executing role desired via actors",
-		zap.String("desired", string(desired)),
-		zap.Duration("exec_timeout", roleCfg.Timeouts.Exec.Duration),
-		zap.Duration("converge", roleCfg.Timeouts.Converge.Duration),
-		zap.Duration("retry_interval", roleCfg.Timeouts.RetryInterval.Duration),
-		zap.Int("actors", len(roleCfg.Actors)),
-	)
-
-	onTransition := func(status RoleStatus) {
-		w.log.Debug("role state transitioning",
-			zap.String("state", status.State),
-			zap.String("health", status.Health),
-		)
-		w.writeStatus(ctx, status)
-	}
-
-	status := executor.Reconcile(ctx, RoleRequest{
+	req := RoleRequest{
 		ClusterGroup:    w.membership.ClusterGroup,
 		ManagementGroup: w.membership.ManagementGroup,
 		NodeID:          w.cfg.Node.NodeID,
 		Role:            w.role,
 		Desired:         string(desired),
-	}, onTransition)
+	}
 
-	w.log.Debug(
-		"role execution finished",
-		zap.String("desired", string(desired)),
-		zap.String("actual", status.State),
-		zap.String("health", status.Health),
-		zap.Any("details", status.Details),
-	)
+	var status RoleStatus
+	if !managed {
+		status = executor.ReconcileDisabled(ctx, req)
+	} else {
+		onTransition := func(s RoleStatus) { w.writeStatus(ctx, s) }
+		status = executor.Reconcile(ctx, req, onTransition)
+	}
+
+	if model.ActualState(status.State) != w.lastActual {
+		w.log.Debug(
+			"role actual state changed",
+			zap.String("desired", string(desired)),
+			zap.Bool("managed", managed),
+			zap.String("actual", status.State),
+			zap.String("health", status.Health),
+			zap.Any("details", status.Details),
+		)
+		w.lastActual = model.ActualState(status.State)
+	}
 
 	w.writeStatus(ctx, status)
 }
@@ -395,11 +384,7 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		}
 
 		if err := w.etcd.PutWithLease(ctx, actualKey, actualData, leaseID); err != nil {
-			w.log.Error(
-				"failed to write actual",
-				zap.String("key", actualKey),
-				zap.Error(err),
-			)
+			logEtcdWriteError(w.log, "failed to write actual", actualKey, err)
 			return
 		}
 	}
@@ -412,11 +397,7 @@ func (w *Worker) writeStatus(ctx context.Context, status RoleStatus) {
 		}
 
 		if err := w.etcd.PutWithLease(ctx, healthKey, healthData, leaseID); err != nil {
-			w.log.Error(
-				"failed to write health",
-				zap.String("key", healthKey),
-				zap.Error(err),
-			)
+			logEtcdWriteError(w.log, "failed to write health", healthKey, err)
 			return
 		}
 	}
@@ -471,8 +452,6 @@ func toActualState(state string) model.ActualState {
 		return model.ActualActive
 	case string(model.ActualPassive):
 		return model.ActualPassive
-	case string(model.ActualIdle):
-		return model.ActualIdle
 	case string(model.ActualStarting):
 		return model.ActualStarting
 	case string(model.ActualStopping):
@@ -495,6 +474,14 @@ func toHealthStatus(status string) model.HealthStatus {
 	default:
 		return model.HealthFailed
 	}
+}
+
+func logEtcdWriteError(log *zap.Logger, msg, key string, err error) {
+	if err == context.Canceled {
+		log.Debug(msg, zap.String("key", key), zap.Error(err))
+		return
+	}
+	log.Error(msg, zap.String("key", key), zap.Error(err))
 }
 
 func detailsToString(details map[string]any) string {

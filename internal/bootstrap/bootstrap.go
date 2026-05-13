@@ -231,9 +231,10 @@ func (b *Bootstrapper) ensureMembership(ctx context.Context, membership config.M
 	}
 
 	desired := model.DesiredDocument{
-		State:     model.DesiredIdle,
-		UpdatedAt: now,
-		Details:   "bootstrap",
+		State:          model.DesiredPassive,
+		Managed: false,
+		UpdatedAt:      now,
+		Details:        "bootstrap",
 	}
 
 	desiredData, err := json.Marshal(desired)

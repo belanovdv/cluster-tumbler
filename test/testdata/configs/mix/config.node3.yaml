@@ -1,0 +1,87 @@
+etcd:
+  endpoints:
+    - ds-cluster-node3.mp10.ptsecurity.ru:2379
+    - ds-cluster-node4.mp10.ptsecurity.ru:2379
+    - ds-cluster-node5.mp10.ptsecurity.ru:2379
+  dial_timeout: 3s
+  retry_interval: 1s
+
+logger:
+  level: debug
+  format: plain
+  console: true
+  file: ""
+
+api:
+  listen: ":5080"
+  # token: "your-secret-token"  # optional; if set, all /api/v1/* requests require Authorization: Bearer <token>
+
+cluster:
+  id: second_cluster
+  name: "custom second_cluster name"
+  groups:
+    rmq_cluster:
+      name: "custom RMQ name"
+  failover_mode: manual
+  leader_ttl: 2s
+  leader_renew_interval: 500ms
+  session_ttl: 30s
+
+node:
+  node_id: node3
+  name: "custom node3 name"
+  actors_base_dir: "."
+  memberships:
+    - cluster_group: rmq_cluster
+      management_group: node3
+
+management_groups:
+  rmq_cluster:
+    node3:
+      priority: 1
+      roles:
+        - rmq
+
+roles:
+  defaults:
+    timeouts:
+      exec: 5s
+      converge: 10s
+      retry_interval: 1s
+      check_interval: 5s
+      details_max_size: 4096
+
+  postgresql:
+    name: "custom PG name"
+    actors:
+      probe_active: "test/testdata/scripts/probe_active.sh pg"
+      set_active: "test/testdata/scripts/set_active.sh pg"
+      probe_passive: "test/testdata/scripts/probe_passive.sh pg"
+      set_passive: "test/testdata/scripts/set_passive.sh pg"
+      force_stop: "test/testdata/scripts/force_stop.sh pg"
+
+  core:
+    name: "custom Core name"
+    actors:
+      probe_active: "test/testdata/scripts/probe_active.sh core"
+      set_active: "test/testdata/scripts/set_active.sh core"
+      probe_passive: "test/testdata/scripts/probe_passive.sh core"
+      set_passive: "test/testdata/scripts/set_passive.sh core"
+      force_stop: "test/testdata/scripts/force_stop.sh core"
+
+  mc:
+    name: "custom MC name"
+    actors:
+      probe_active: "test/testdata/scripts/probe_active.sh mc"
+      set_active: "test/testdata/scripts/set_active.sh mc"
+      probe_passive: "test/testdata/scripts/probe_passive.sh mc"
+      set_passive: "test/testdata/scripts/set_passive.sh mc"
+      force_stop: "test/testdata/scripts/force_stop.sh mc"
+  rmq:
+    name: "custom RMQ name"
+    actors:
+      probe_active: "test/testdata/scripts/probe_active.sh rmq"
+      set_active: "test/testdata/scripts/set_active.sh rmq"
+      probe_passive: "test/testdata/scripts/probe_passive.sh rmq"
+      set_passive: "test/testdata/scripts/set_passive.sh rmq"
+      force_stop: "test/testdata/scripts/force_stop.sh rmq"
